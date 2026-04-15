@@ -9,10 +9,10 @@ from ..order_book.events import FillEvent
 from ..market_simulator.market import Market
 from ..stock_simulation.config import TRADING_SECONDS_PER_YEAR
 
-# FX session boundaries in seconds from midnight UTC
-# Tokyo: 00:00-08:00, London: 08:00-16:00, New York: 13:00-21:00
-# We use 3 non-overlapping resets: 00:00, 08:00, 16:00 UTC
-FX_SESSION_RESETS_UTC = [0, 8 * 3600, 16 * 3600]
+# FX session boundaries in seconds from midnight UTC.
+# t=0 is intentionally excluded — cold start is handled by _first_quote flag.
+# Tokyo: 00:00-08:00  |  London: 08:00-16:00  |  New York: 16:00-00:00
+FX_SESSION_RESETS_UTC = [8 * 3600, 16 * 3600]
 
 
 @dataclass
@@ -110,8 +110,15 @@ class Quoter:
         self._prev_best_bid: float | None = None
         self._prev_best_ask: float | None = None
 
-        # Last session reset timestamp (in simulation seconds)
-        self._last_session_reset_t: float = -1.0
+        # Flag: True until compute_quotes() has been called at least once.
+        # Guarantees the very first call ALWAYS emits the full 10×2 ladder,
+        # regardless of threshold / session-reset logic.
+        self._first_quote: bool = True
+
+        # Last session reset timestamp (in simulation seconds).
+        # Initialised to 0.0 (not -1) so boundaries > 0 are not accidentally
+        # triggered on the first call.
+        self._last_session_reset_t: float = 0.0
 
         # Order flow imbalance — rolling list of MM fill directions (capped at imbalance_window).
         # "sell" fill = client hit our ask -> bullish signal -> tilt reservation price up.
@@ -162,140 +169,135 @@ class Quoter:
 
     def compute_quotes(self, step: int, t: float, resting_orders: dict) -> Tuple[List[Quote], List[str]]:
         """
-        Compute a fresh 10-level bid/ask ladder and decide which resting orders to cancel.
+        Compute the MM quote ladder and decide which resting orders to cancel/replace.
+
+        Parameters
+        ----------
+        step           : current simulation step (integer index into price arrays).
+        t              : elapsed seconds since session start. t = step * dt.
+        resting_orders : book.mm_resting_orders — dict of currently posted MM orders.
+                         Format: {order_id: {"price", "direction", "level", "age"}}
 
         Returns
         -------
-        new_quotes : Quote objects to submit. Empty if no requote needed.
-        cancel_ids : IDs of resting MM orders to cancel before submitting.
+        new_quotes : Quote objects to post to the book. Empty = do nothing.
+        cancel_ids : order IDs to cancel BEFORE posting new_quotes.
+
+        Decision logic (in priority order)
+        -----------------------------------
+        1. First call ever           -> full 20-order ladder, no cancels.
+        2. FX session boundary       -> cancel all, full 20-order ladder.
+        3. Full fill received        -> replace only the filled (direction, level) slot.
+        4. Best-price drift > threshold -> cancel ALL resting orders, full reprice.
+        5. Stale + stressed inventory -> cancel stale orders, reprice those slots.
+        6. Nothing triggered         -> return [], [] (no action).
         """
 
-        # Collect IDs and exact (direction, level) slots of fully-filled orders.
-        # Partial fills are NOT in _pending_fills, so their orders stay untouched here.
-        filled_ids   = {f.order_id           for f in self._pending_fills}
+        # ── Step 1: drain the fill queue (accumulated since last call via on_fill)
         filled_slots = {(f.direction, f.level) for f in self._pending_fills}
         self._pending_fills.clear()
 
-        # ── Compute theoretical quotes
+        # ── Step 2: compute current theoretical best bid and ask
         bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
         bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
-        best_bid_ref = max(bid_B, bid_C)
-        best_ask_ref = min(ask_B, ask_C)
-        fair_mid     = (best_bid_ref + best_ask_ref) / 2.0
+        fair_mid     = (max(bid_B, bid_C) + min(ask_B, ask_C)) / 2.0
 
         sigma            = self._estimate_vol(step)
         time_remaining_y = max(self.cfg.T - t, 1.0) / TRADING_SECONDS_PER_YEAR
         time_fraction    = t / self.cfg.T
         penalty_factor   = 1.0 + self.cfg.terminal_penalty_strength * (time_fraction ** 3)
 
+        # Avellaneda-Stoikov reservation price
         reservation_price = (
             fair_mid
             - self.inventory * self.cfg.gamma * sigma**2 * time_remaining_y * penalty_factor
         )
-
-        # ── Order flow imbalance tilt (Cartea & Jaimungal)
-        # imbalance in [-1, 1]: +1 = all client buys (hitting ask), -1 = all client sells (hitting bid).
-        # When clients buy from us (hit ask), price is likely drifting up -> tilt reservation up.
-        # When clients sell to us (hit bid), price is likely drifting down -> tilt reservation down.
-        imbalance = self._compute_imbalance()
+        # Order-flow imbalance tilt (Cartea & Jaimungal)
+        imbalance          = self._compute_imbalance()
         reservation_price += self.cfg.alpha_imbalance * imbalance * fair_mid
 
+        # A-S optimal spread
         spread_AS_bps = (
             self.cfg.gamma * (sigma * 100.0) ** 2 * time_remaining_y
             + (2.0 / self.cfg.gamma) * np.log(1.0 + self.cfg.gamma / self.cfg.k)
         )
-        spread_AS = spread_AS_bps / 10_000.0 * fair_mid
-
-        sigma_per_s    = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR)
-        spread_latency = 2.0 * sigma_per_s * np.sqrt(self._effective_gap_s)
-
+        spread_AS        = spread_AS_bps / 10_000.0 * fair_mid
+        sigma_per_s      = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR)
+        spread_latency   = 2.0 * sigma_per_s * np.sqrt(self._effective_gap_s)
         inventory_ratio  = self.inventory / self.capital_K
         spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
+        total_spread     = spread_AS + spread_latency + spread_inventory
+        half_spread      = max(total_spread / 2.0, self.cfg.tick_size)
 
-        total_spread = spread_AS + spread_latency + spread_inventory
-        half_spread  = max(total_spread / 2.0, self.cfg.tick_size)
-
+        # Asymmetric delta skew (Guéant)
         if self.cfg.use_asymmetric_delta:
-            skew_delta = self.inventory * np.sqrt(
-                self.cfg.gamma * sigma**2 / (2.0 * self.cfg.k)
-            )
-            max_skew   = half_spread - 0.5 * self.cfg.tick_size
-            skew_delta = np.clip(skew_delta, -max_skew, max_skew)
+            skew_delta = self.inventory * np.sqrt(self.cfg.gamma * sigma**2 / (2.0 * self.cfg.k))
+            skew_delta = np.clip(skew_delta, -(half_spread - 0.5 * self.cfg.tick_size),
+                                              (half_spread - 0.5 * self.cfg.tick_size))
         else:
             skew_delta = 0.0
 
-        ask_half = half_spread - skew_delta
-        bid_half = half_spread + skew_delta
-
-        best_bid = self._snap_to_tick(reservation_price - bid_half)
-        best_ask = self._snap_to_tick(reservation_price + ask_half)
-
+        best_bid = self._snap_to_tick(reservation_price - half_spread - skew_delta)
+        best_ask = self._snap_to_tick(reservation_price + half_spread - skew_delta)
         if best_bid >= best_ask:
             best_ask = best_bid + self.cfg.tick_size
 
-        # ── Session reset check
-        # At each FX session boundary: cancel everything, start clean.
-        if self._is_session_reset(t):
-            self._last_session_reset_t = t
+        # Threshold in price units — how much best_bid/ask must move to force a reprice
+        threshold = self.cfg.requote_threshold_spread_fraction * total_spread
+
+        # ── Priority 1: very first call — full ladder, no prior state to compare against
+        if self._first_quote:
+            self._first_quote   = False
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
-            self._flow_history.clear()   # reset imbalance signal at each session boundary
+            return self._build_ladder(best_bid, best_ask, inventory_ratio), []
+
+        # ── Priority 2: FX session boundary — cancel everything, start fresh
+        if self._is_session_reset(t):
+            self._last_session_reset_t = t
+            self._prev_best_bid        = best_bid
+            self._prev_best_ask        = best_ask
+            self._flow_history.clear()
             cancel_ids = list(resting_orders.keys())
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
-        # ── Selective cancel logic
-        # Threshold in price units = fraction of current total spread
-        threshold = self.cfg.requote_threshold_spread_fraction * total_spread
+        # ── Priority 3: best price has drifted beyond threshold
+        # Compare current best_bid/ask against what was quoted last time.
+        # If the mid has moved enough, cancel ALL resting orders and reprice everything.
+        price_drifted = (
+            abs(best_bid - self._prev_best_bid) > threshold
+            or abs(best_ask - self._prev_best_ask) > threshold
+        )
+        if price_drifted:
+            cancel_ids          = list(resting_orders.keys())
+            self._prev_best_bid = best_bid
+            self._prev_best_ask = best_ask
+            return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
+        # ── Priority 4: some slots were fully filled — replace only those slots
+        # filled_slots contains (direction, level) pairs from on_fill() callbacks.
+        # The orders are already gone from the book — no cancel needed, just re-emit.
+        if filled_slots:
+            self._prev_best_bid = best_bid
+            self._prev_best_ask = best_ask
+            return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, filled_slots), []
+
+        # ── Priority 5: stale orders with stressed inventory — cancel and reprice those slots
         inventory_stressed = abs(inventory_ratio) > self.cfg.stale_inventory_fraction
+        if inventory_stressed:
+            cancel_ids:      List[str]            = []
+            cancelled_slots: Set[Tuple[str, int]] = set()
+            for oid, info in resting_orders.items():
+                if info["age"] > self.cfg.stale_steps:
+                    cancel_ids.append(oid)
+                    cancelled_slots.add((info["direction"], info["level"]))
+            if cancel_ids:
+                self._prev_best_bid = best_bid
+                self._prev_best_ask = best_ask
+                return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, cancelled_slots), cancel_ids
 
-        cancel_ids:      List[str]            = []
-        cancelled_slots: Set[Tuple[str, int]] = set()   # (direction, level) pairs to rebuild
-
-        for oid, info in resting_orders.items():
-            # Rule 1: filled orders must be replaced (already removed from book)
-            if oid in filled_ids:
-                cancel_ids.append(oid)
-                cancelled_slots.add((info["direction"], info["level"]))
-                continue
-
-            resting_price = info["price"]
-            side          = info["direction"]
-            level         = info["level"]
-            age           = info["age"]
-
-            # New theoretical price for this side
-            theo_price = best_bid if side == "buy" else best_ask
-
-            # Rule 2: price has drifted beyond threshold
-            if abs(resting_price - theo_price) > threshold:
-                cancel_ids.append(oid)
-                cancelled_slots.add((side, level))
-                continue
-
-            # Rule 3: order is stale AND inventory is stressed
-            if age > self.cfg.stale_steps and inventory_stressed:
-                cancel_ids.append(oid)
-                cancelled_slots.add((side, level))
-
-        # Also add slots from filled orders already removed from the book
-        # before compute_quotes was called (not in resting_orders anymore)
-        cancelled_slots |= filled_slots
-
-        # Only submit new quotes if there is something to cancel/replace
-        if not cancel_ids:
-            if (self._prev_best_bid is not None
-                    and abs(best_bid - self._prev_best_bid) <= threshold
-                    and abs(best_ask - self._prev_best_ask) <= threshold):
-                return [], []
-
-        self._prev_best_bid = best_bid
-        self._prev_best_ask = best_ask
-
-        # Surgical requote: only rebuild the exact (direction, level) slots that were cancelled.
-        # e.g. L1 ask filled → emit 1 new ask at L1 only, all other levels untouched.
-        # Session reset is the only case that rebuilds the full ladder.
-        return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, cancelled_slots), cancel_ids
+        # ── Nothing triggered — resting orders are still valid, do nothing
+        return [], []
 
     
     
@@ -471,7 +473,8 @@ class Quoter:
 
     def _get_stale_quotes(self, market: Market, step: int, lag: int) -> Tuple[float, float]:
         stale_step = max(0, step - lag)
-        return float(market.bid_price[stale_step]), float(market.ask_price[stale_step])
+        #return float(market.bid_price[stale_step]), float(market.ask_price[stale_step])
+        return float(market.bid_price_skewed[stale_step]), float(market.ask_price_skewed[stale_step])
 
     def _compute_imbalance(self) -> float:
         """

@@ -14,6 +14,10 @@ def _generate_order_id():
     rand = random.randint(1, 9999)
     return f"{ts}_{rand:04d}"
 
+def generate_order_id():
+    """Public wrapper — use this in notebooks/tests to generate order IDs."""
+    return _generate_order_id()
+
 
 class Order:
 
@@ -209,6 +213,37 @@ class Order_book:
         mm_ids = self._df_order_book[self._df_order_book["Origin"] == "market_maker"].index.tolist()
         self.cancel_orders(mm_ids)
 
+    def display_mm_quotes(self):
+        """
+        Print a clean ladder view of all resting MM orders.
+        Bids (buy) sorted descending by price, asks (sell) sorted ascending.
+        Shows level, direction, price, and remaining size.
+        """
+        mm = self._df_order_book[self._df_order_book["Origin"] == "market_maker"].copy()
+        if mm.empty:
+            print("No resting MM orders in the book.")
+            return
+
+        asks = mm[mm["Direction"] == "sell"].sort_values("Price", ascending=True)
+        bids = mm[mm["Direction"] == "buy"].sort_values("Price", ascending=False)
+
+        print("=" * 52)
+        print(f"{'ASKS (sell)':<52}")
+        print("-" * 52)
+        print(f"  {'Lvl':>4}  {'Price':>12}  {'Size':>14}")
+        print("-" * 52)
+        for _, row in asks.iterrows():
+            print(f"  {int(row['Level']):>4}  {row['Price']:>12.5f}  {row['Size']:>14.2f}")
+        print("=" * 52)
+        print(f"  {'--- MID ---':^46}")
+        print("=" * 52)
+        for _, row in bids.iterrows():
+            print(f"  {int(row['Level']):>4}  {row['Price']:>12.5f}  {row['Size']:>14.2f}")
+        print("-" * 52)
+        print(f"{'BIDS (buy)':<52}")
+        print("=" * 52)
+        print(f"  Total MM orders: {len(mm)}  ({len(asks)} asks, {len(bids)} bids)")
+
     def _generate_n_random_order(self, number_of_order):
         for _ in tqdm(range(0, number_of_order), "Generating order book"):
             self._generate_random_order()
@@ -235,6 +270,31 @@ class Order_book:
             size = abs(round(np.random.normal(2000, 100)))
             orders.append(Order(_generate_order_id(), direction, round(new_price, 4), size, order_type, origin))
         return orders
+
+    def submit_mm_quotes(self, quotes: list):
+        """
+        Add market-maker quote orders to the book WITHOUT triggering matching.
+
+        MM orders should only be matched when a client order arrives.
+        Calling _try_clear() here would let MM bids cross MM asks if the
+        ladder is wide enough, which is wrong.  Use this method for all
+        quoter output; use add_orders_batch() only for client order batches.
+
+        Parameters
+        ----------
+        quotes : list of Order objects (origin must be "market_maker").
+        """
+        for order in quotes:
+            self.add_order(order)
+        # No _try_clear() here — matching happens in submit_client_order()
+
+    def submit_client_order(self, order):
+        """
+        Add a single client order and immediately attempt matching against
+        resting MM quotes.  This is the correct place to trigger _try_clear().
+        """
+        self.add_order(order)
+        self._try_clear()
 
     def add_orders_batch(self, orders: list):
         """Add a list of Order objects to the book, then attempt clearing."""
