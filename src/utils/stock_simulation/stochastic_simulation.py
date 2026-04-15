@@ -75,3 +75,84 @@ def generate_gbm_path(
         S = np.round(S / tick_size) * tick_size
 
     return S, vol_realized, mu_dt, dt, N
+
+
+def generate_heston_path(
+    time_grid:  np.ndarray,
+    S0:         float = 100.0,
+    drift:      float = 0.0,
+    v0:         float = 0.04,    # initial variance (= vol² = 0.20² for 20%)
+    kappa:      float = 2.0,     # mean-reversion speed
+    theta:      float = 0.04,    # long-run variance (= target vol²)
+    xi:         float = 0.3,     # vol of vol
+    rho:        float = -0.1,    # spot-vol correlation (FX: mild negative)
+    tick_size:  float = 0.0001,
+) -> tuple:
+    """
+    Simulate a Heston (1993) stochastic volatility price path.
+
+    Model:
+        dS = μ S dt + √v S dW_S
+        dv = κ(θ - v) dt + ξ √v dW_v
+        corr(dW_S, dW_v) = ρ dt
+
+    Discretization: Full-truncation Euler-Maruyama (Lord et al. 2010).
+
+    Returns
+    -------
+    S             : np.ndarray, shape (N+1,) — price path
+    v             : np.ndarray, shape (N+1,) — instantaneous variance path
+    vol_realized  : np.ndarray, shape (N,)   — per-step log-return residuals
+    dt            : float — time step in seconds
+    N             : int   — number of steps
+    """
+    dt = time_grid[1] - time_grid[0]
+    N  = len(time_grid) - 1
+
+    # ── Feller condition check ────────────────────────────────────────────────
+    feller = 2.0 * kappa * theta / (xi ** 2)
+    if feller <= 1.0:
+        import warnings
+        warnings.warn(
+            f"Feller condition violated (2κθ/ξ² = {feller:.3f} ≤ 1). "
+            "The variance process may hit zero; results may be unreliable.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    dt_year = dt / TRADING_SECONDS_PER_YEAR
+    rho_perp = np.sqrt(max(1.0 - rho ** 2, 0.0))  # sqrt(1 - ρ²) for Cholesky
+
+    # ── Correlated Brownian increments (Cholesky) ─────────────────────────────
+    Z_S   = np.random.standard_normal(N)
+    Z_ind = np.random.standard_normal(N)
+    Z_v   = rho * Z_S + rho_perp * Z_ind
+
+    # ── Simulate variance (CIR) and price paths ───────────────────────────────
+    v = np.empty(N + 1)
+    S = np.empty(N + 1)
+    v[0] = v0
+    S[0] = S0
+
+    vol_realized = np.empty(N)
+
+    for t in range(N):
+        v_plus = max(v[t], 0.0)                         # full-truncation
+        sqrt_v_dt = np.sqrt(v_plus * dt_year)
+
+        # variance update
+        v[t + 1] = max(
+            v[t] + kappa * (theta - v_plus) * dt_year + xi * sqrt_v_dt * Z_v[t],
+            0.0,
+        )
+
+        # log-return increment
+        log_ret = (drift - 0.5 * v_plus) * dt_year + sqrt_v_dt * Z_S[t]
+        vol_realized[t] = sqrt_v_dt * Z_S[t]           # stochastic part only
+        S[t + 1] = S[t] * np.exp(log_ret)
+
+    # ── Snap to tick grid ─────────────────────────────────────────────────────
+    if tick_size > 0:
+        S = np.round(S / tick_size) * tick_size
+
+    return S, v, vol_realized, dt, N
