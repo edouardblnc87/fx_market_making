@@ -58,6 +58,66 @@ class Stock(object):
         self.simulation =  path
         self.sim_type   = 'gbm'
     
+    def inject_vol_shock(self, t_start_frac: float = 0.4, duration_s: float = 300.0,
+                         shock_factor: float = 3.0):
+        """Splice a vol shock into the existing price path.
+
+        Re-draws the log-return increments for the shock window using
+        shock_factor * vol, then reconnects the original increments (at normal
+        vol) from the shock end onwards.  Everything before t_start is untouched.
+
+        Parameters
+        ----------
+        t_start_frac : float
+            Start of shock as a fraction of the total path (0 to 1).
+        duration_s   : float
+            Duration of the shock in seconds.
+        shock_factor : float
+            Multiplier on self.vol during the shock (e.g. 3.0 = triple vol).
+        """
+        if self.simulation is None:
+            print("No path generated yet.")
+            return
+
+        dt      = self.time_step
+        N       = self.n_steps
+        dt_year = dt / TRADING_SECONDS_PER_YEAR
+
+        t0          = int(t_start_frac * N)
+        shock_steps = min(round(duration_s / dt), N - t0)
+        t_end       = t0 + shock_steps
+
+        # ── Shock-period increments ───────────────────────────────────────────
+        vol_shock = shock_factor * self.vol
+        sigma_dt  = vol_shock * np.sqrt(dt_year)
+        mu_dt     = (self.drift - 0.5 * vol_shock ** 2) * dt_year
+
+        Z_shock        = np.random.standard_normal(shock_steps)
+        shock_log_rets = mu_dt + sigma_dt * Z_shock
+
+        # ── Rebuild log-price path ────────────────────────────────────────────
+        orig_log_S = np.log(self.simulation)
+        log_S      = orig_log_S.copy()
+
+        # shock window
+        log_S[t0 + 1 : t_end + 1] = log_S[t0] + np.cumsum(shock_log_rets)
+
+        # post-shock: keep original increments, shifted to new level at t_end
+        orig_post_rets = np.diff(orig_log_S[t_end:])
+        if len(orig_post_rets) > 0:
+            log_S[t_end + 1 :] = log_S[t_end] + np.cumsum(orig_post_rets)
+
+        S = np.exp(log_S)
+        if self.tick_size > 0:
+            S = np.round(S / self.tick_size) * self.tick_size
+
+        self.simulation  = S
+        self.vol_realized = np.diff(log_S)   # update residuals to match new path
+        self.shock_params = dict(
+            t0=t0, t_end=t_end, t_start_frac=t_start_frac,
+            duration_s=duration_s, shock_factor=shock_factor,
+        )
+
     #return the series of annualized realized vol over a window n
     def compute_realized_volatility(self, window_size):
         if self.simulation is None:
