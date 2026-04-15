@@ -15,6 +15,34 @@ class Stock(object):
         self.simulation: np.array | None = None   # shape (n_sims, N+1) after first run
         self._time_grid: np.array | None  = None   # seconds, set by simulate_gbm
         self.empty_sim = True
+        self.sim_type: str | None = None           # 'gbm' or 'heston'
+
+    def simulate_heston(self, n_days: int = 1, dt_seconds: float = 0.01,
+                        v0=None, kappa: float = 2.0, theta=None,
+                        xi: float = 0.3, rho: float = -0.1):
+        """Simulate Heston stochastic-vol price path. Stores same attributes as
+        simulate_gbm() plus variance_path, vol_path, and heston_params."""
+        if v0 is None:
+            v0 = self.vol ** 2
+        if theta is None:
+            theta = self.vol ** 2
+
+        self.empty_sim = False
+        time_grid = generate_time_grid(n_days, dt_seconds)
+        S, v, vol_realized, dt, n_steps = generate_heston_path(
+            time_grid, S0=self.origin, drift=self.drift,
+            v0=v0, kappa=kappa, theta=theta, xi=xi, rho=rho,
+            tick_size=self.tick_size,
+        )
+        self.simulation    = S
+        self._time_grid    = time_grid
+        self.time_step     = dt
+        self.n_steps       = n_steps
+        self.vol_realized  = vol_realized
+        self.variance_path = v
+        self.vol_path      = np.sqrt(np.maximum(v, 0.0))
+        self.heston_params = dict(kappa=kappa, theta=theta, xi=xi, rho=rho, v0=v0)
+        self.sim_type      = 'heston'
 
     def simulate_gbm(self, n_days: int = 30, dt_seconds: float = 0.05):
 
@@ -28,12 +56,29 @@ class Stock(object):
         self._time_grid = time_grid
 
         self.simulation =  path
+        self.sim_type   = 'gbm'
+    
+    #return the series of annualized realized vol over a window n
+    def compute_realized_volatility(self, window_size):
+        if self.simulation is None:
+            print("No path generated yet — run simulate_gbm first.")
+            return
+        else:
+            coeff_annualization = np.sqrt(TRADING_SECONDS_PER_DAY * 252/self.time_step)
+            print(f"Coefficient annualization : {coeff_annualization}")
+            log_returns = np.diff(np.log(self.simulation))
+            vol = np.zeros(len(self.simulation))
+            for t in range(window_size, len(self.simulation)):                                                                                                                                                                       
+                vol[t] = np.std(log_returns[t - window_size : t])                                                                                                                                                              
+            return vol * coeff_annualization
+             
+
 
 # ── Plots ──────────────────────────────────────────────────────────────────
 
     def plot_path(self):
         if self.simulation is None:
-            print("No path generated yet — run simulate_gbm first.")
+            print("No path generated yet — run simulate_gbm or simulate_heston first.")
             return
 
         t = self._time_grid / 3600   # seconds → hours, more readable on x-axis
@@ -42,14 +87,16 @@ class Stock(object):
         fig.patch.set_facecolor("#111111")
         ax.set_facecolor("#111111")
 
-
-        
         ax.plot(t, self.simulation, linewidth=0.8, color="#00bfff")
 
-        ax.set_title(
-            f"GBM — S₀={self.origin}  σ={self.vol:.0%}  μ={self.drift:.0%}",
-            color="white", fontsize=14, pad=12,
-        )
+        if self.sim_type == 'heston':
+            p = self.heston_params
+            title = (f"Heston — S₀={self.origin}  σ={self.vol:.0%}  μ={self.drift:.0%}"
+                     f"  κ={p['kappa']}  θ={p['theta']:.4f}  ξ={p['xi']}  ρ={p['rho']}")
+        else:
+            title = f"GBM — S₀={self.origin}  σ={self.vol:.0%}  μ={self.drift:.0%}"
+
+        ax.set_title(title, color="white", fontsize=13, pad=12)
         ax.set_xlabel("Time (hours)", color="white", fontsize=12)
         ax.set_ylabel("Price",        color="white", fontsize=12)
 
@@ -63,9 +110,45 @@ class Stock(object):
         plt.tight_layout()
         plt.show()
 
+    def plot_vol_path(self):
+        """2-panel dark figure: price path (cyan) + instantaneous vol path (magenta)."""
+        if not hasattr(self, 'vol_path') or self.vol_path is None:
+            print("No Heston path generated yet — run simulate_heston first.")
+            return
+
+        t = self._time_grid / 3600
+
+        fig, (ax_price, ax_vol) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+        fig.patch.set_facecolor("#111111")
+
+        for ax in (ax_price, ax_vol):
+            ax.set_facecolor("#111111")
+            ax.tick_params(colors="white")
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+            ax.spines["left"].set_color("#444444")
+            ax.spines["bottom"].set_color("#444444")
+            ax.grid(True, linestyle="--", linewidth=0.4, alpha=0.5, color="#444444")
+
+        ax_price.plot(t, self.simulation, linewidth=0.7, color="#00bfff")
+        ax_price.set_title(
+            f"Heston — S₀={self.origin}  σ={self.vol:.0%}  ξ={self.heston_params['xi']}  ρ={self.heston_params['rho']}",
+            color="white", fontsize=13, pad=10,
+        )
+        ax_price.set_ylabel("Price", color="white", fontsize=11)
+
+        # vol_path = sqrt(v), v is already in annualized variance units
+        ax_vol.plot(t, self.vol_path, linewidth=0.7, color="#ff44cc")
+        ax_vol.set_title("Instantaneous Volatility (ann.)", color="white", fontsize=13, pad=10)
+        ax_vol.set_xlabel("Time (hours)", color="white", fontsize=11)
+        ax_vol.set_ylabel("Vol (ann.)",   color="white", fontsize=11)
+
+        plt.tight_layout()
+        plt.show()
+
     def sanity_check(self):
         if self.simulation is None:
-            print("No path generated yet — run simulate_gbm first.")
+            print("No path generated yet — run simulate_gbm or simulate_heston first.")
             return
 
         log_rets  = np.diff(np.log(self.simulation))
@@ -78,16 +161,50 @@ class Stock(object):
 
         expected_drift = self.drift - 0.5 * self.vol ** 2
 
+        is_heston = self.sim_type == 'heston'
+        model_tag = "Heston" if is_heston else "GBM"
+
+        # For Heston: fat tails only emerge at coarser aggregation (kurtosis ~ ξ²/κ²τ → 0 as dt→0).
+        # Aggregate into ~60s buckets so the variance has time to drift between observations.
+        if is_heston:
+            agg_steps = max(1, round(60.0 / self.time_step))
+            n_buckets = len(log_rets) // agg_steps
+            agg_rets  = log_rets[: n_buckets * agg_steps].reshape(n_buckets, agg_steps).sum(axis=1)
+            kurt_label = f"Excess kurtosis (60s agg.)"
+            kurt_display = stats.kurtosis(agg_rets)
+        else:
+            kurt_label   = "Excess kurtosis"
+            kurt_display = kurt
+
+        print("─" * 62)
+        print(f"  Sanity check — {model_tag}")
         print("─" * 62)
         print(f"{'Metric':<35} {'Value':>12}  {'Expected':>12}")
         print("─" * 62)
         print(f"{'Realized ann. vol':<35} {vol_ann:>11.4%}  {self.vol:>11.4%}")
         print(f"{'Realized ann. drift (Itô)':<35} {drift_ann:>12.4f}  {expected_drift:>12.4f}")
         print(f"{'Skewness of log-returns':<35} {skewness:>12.4f}  {'~0':>12}")
-        print(f"{'Excess kurtosis':<35} {kurt:>12.4f}  {'~0':>12}")
+        kurt_expected = '>0 (fat tails)' if is_heston else '~0'
+        print(f"{kurt_label:<35} {kurt_display:>12.4f}  {kurt_expected:>12}")
         print(f"{'Min price':<35} {self.simulation.min():>12.4f}  {'—':>12}")
         print(f"{'Max price':<35} {self.simulation.max():>12.4f}  {'—':>12}")
         print(f"{'Final price':<35} {self.simulation[-1]:>12.4f}  {'—':>12}")
+
+        # ── Heston-specific rows ───────────────────────────────────────────────
+        if hasattr(self, 'variance_path') and self.variance_path is not None:
+            p = self.heston_params
+            # Use 60s aggregated returns for autocorr too — same reason as kurtosis
+            sq_agg  = agg_rets ** 2
+            autocorr = np.corrcoef(sq_agg[:-1], sq_agg[1:])[0, 1]
+            feller    = 2.0 * p['kappa'] * p['theta'] / (p['xi'] ** 2)
+            xi_realized = np.std(np.diff(self.variance_path) /
+                                 np.sqrt(np.maximum(self.variance_path[:-1], 1e-10) *
+                                         (self.time_step / TRADING_SECONDS_PER_YEAR)))
+            print("─" * 62)
+            print(f"{'Vol of vol realized':<35} {xi_realized:>11.4f}  {p['xi']:>11.4f}")
+            print(f"{'Autocorr sq. returns (60s agg.)':<35} {autocorr:>12.4f}  {'>0 expected':>12}")
+            print(f"{'Feller condition (2κθ/ξ²)':<35} {feller:>12.4f}  {'>1 required':>12}")
+
         print("─" * 62)
 
         # ── Plot: price path + log-return histogram ────────────────────────────
@@ -107,7 +224,7 @@ class Stock(object):
 
         # Left: price path
         ax_path.plot(t, self.simulation, linewidth=0.8, color="#00bfff")
-        ax_path.set_title("GBM Price Path", color="white", fontsize=13)
+        ax_path.set_title(f"{model_tag} Price Path", color="white", fontsize=13)
         ax_path.set_xlabel("Time (hours)", color="white", fontsize=11)
         ax_path.set_ylabel("Price",        color="white", fontsize=11)
 
@@ -126,7 +243,7 @@ class Stock(object):
                        labelcolor="white", fontsize=10)
 
         fig.suptitle(
-            f"Sanity check — σ={self.vol:.0%}  μ={self.drift:.0%}  dt={self.time_step:.3f}s",
+            f"Sanity check [{model_tag}] — σ={self.vol:.0%}  μ={self.drift:.0%}  dt={self.time_step:.3f}s",
             color="white", fontsize=14, y=1.02,
         )
         plt.tight_layout()
