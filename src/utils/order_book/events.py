@@ -9,4 +9,5 @@ class FillEvent:
     price:        float
     size:         float  # matched portion only (may be < original order size)
     step:         int
+    level:        int    # ladder level of the filled MM order (1 = best, 10 = deepest)
     is_full_fill: bool = True  # False = partial, order still resting in the book
