@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..order_book.order_book_impl import Order, _generate_order_id
-from .arrival import intensity, sample_arrival
+from .arrival import intensity, sample_arrival_count
 from .size_model import sample_size
 from . import config as default_cfg
 
@@ -83,7 +83,7 @@ class ClientFlowGenerator:
 
         Returns
         -------
-        orders : list of 0, 1, or 2 Order objects (one buy, one sell max)
+        orders : list of Order objects (N_buy + N_sell, Poisson-sampled per side)
         """
         orders: List[Order] = []
 
@@ -92,14 +92,16 @@ class ClientFlowGenerator:
         delta_bid_bps = max(mid_price - best_bid, 0.0) / mid_price * 10_000
         delta_ask_bps = max(best_ask - mid_price, 0.0) / mid_price * 10_000
 
-        # Buy side: client buy MO/LO arrives with rate λ^a(δ_ask)
+        # Buy side: N_buy ~ Poisson(λ^a(δ_ask) · dt)
         lambda_buy = intensity(delta_ask_bps, self.cfg.A_buy, self.cfg.k_buy)
-        if sample_arrival(lambda_buy, dt, self._rng):
+        n_buy = sample_arrival_count(lambda_buy, dt, self._rng)
+        for _ in range(n_buy):
             orders.append(self._build_order("buy", mid_price, best_bid, best_ask))
 
-        # Sell side: client sell MO/LO arrives with rate λ^b(δ_bid)
+        # Sell side: N_sell ~ Poisson(λ^b(δ_bid) · dt)
         lambda_sell = intensity(delta_bid_bps, self.cfg.A_sell, self.cfg.k_sell)
-        if sample_arrival(lambda_sell, dt, self._rng):
+        n_sell = sample_arrival_count(lambda_sell, dt, self._rng)
+        for _ in range(n_sell):
             orders.append(self._build_order("sell", mid_price, best_bid, best_ask))
 
         return orders

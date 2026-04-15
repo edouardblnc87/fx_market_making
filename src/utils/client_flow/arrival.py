@@ -59,3 +59,22 @@ def sample_arrival(lambda_val: float, dt: float, rng: np.random.Generator) -> bo
     """
     prob = 1.0 - np.exp(-lambda_val * dt)
     return rng.uniform() < prob
+
+
+def sample_arrival_count(lambda_val: float, dt: float, rng: np.random.Generator) -> int:
+    """
+    Sample the number of Poisson arrivals in a time interval dt.
+
+    N ~ Poisson(λ · dt)
+
+    Parameters
+    ----------
+    lambda_val : Poisson intensity (per second)
+    dt         : time step (seconds)
+    rng        : numpy random Generator for reproducibility
+
+    Returns
+    -------
+    Number of arrivals in [t, t+dt)
+    """
+    return int(rng.poisson(lambda_val * dt))

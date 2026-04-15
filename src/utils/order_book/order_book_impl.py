@@ -237,12 +237,11 @@ class Order_book:
         return orders
 
     def add_orders_batch(self, orders: list):
-        """Add a list of Order objects to the book, then attempt clearing."""
+        """Add a list of Order objects to the book."""
         for order in tqdm(orders, desc="Adding orders"):
             self.add_order(order)
-        self._try_clear()
 
-    def _try_clear(self):
+    def try_clear(self):
         """Match client orders against market maker orders (price-time priority, partial fills)."""
 
         # --- client buys vs MM asks ---

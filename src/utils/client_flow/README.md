@@ -74,7 +74,8 @@ ob._generate_n_random_order(40)          # seed MM book
 
 # Generate client flow and submit step by step
 for step, order in gen.generate_session(mid, bid, ask, dt=0.1):
-    ob.add_orders_batch([order])         # triggers _try_clear → matches vs MM quotes
+    ob.add_orders_batch([order])         # add to book
+    ob.try_clear()                       # match crossing orders vs MM quotes
 ```
 
 ---
