@@ -4,6 +4,7 @@ import random
 import numpy as np
 from datetime import datetime
 from . import config
+from .events import FillEvent
 from tqdm import tqdm
 from scipy.stats import truncnorm
 
@@ -16,13 +17,14 @@ def _generate_order_id():
 
 class Order:
 
-    def __init__(self, id, direction, price, size, type, origin="market_maker"):
+    def __init__(self, id, direction, price, size, type, origin="market_maker", level=0):
         self._id = id
         self._direction = direction
         self._price = price
         self._size = size
         self._type = type
         self._origin = origin
+        self._level = level   # ladder level (1 = best quote, 0 = not a ladder order)
         self._order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
     @property
@@ -34,6 +36,7 @@ class Order:
             "Size": self._size,
             "Type": self._type,
             "Origin": self._origin,
+            "Level": self._level,
             "Time": self._order_time,
         }
 
@@ -44,10 +47,22 @@ class Order_book:
 
         #initial spread when randomly initializing the order book
         self._spread_init = spread_init
-        self._df_order_book = pd.DataFrame(columns=["Id", "Direction", "Price", "Size", "Type", "Origin", "Time"])
+        self._df_order_book = pd.DataFrame(columns=["Id", "Direction", "Price", "Size", "Type", "Origin", "Level", "Time"])
         self._df_matches = pd.DataFrame(columns=["MatchId", "ClientOrderId", "MmOrderId", "Direction", "Price", "MatchedSize", "Time"])
 
         self._listener = []
+
+        # [ADDED] Registry of resting MM orders: {order_id -> {"price", "direction", "age"}}
+        # Updated on every add/cancel so the Quoter can inspect resting state without
+        # querying the full DataFrame each step.
+        self._mm_resting: dict = {}
+
+        # [ADDED] Quoter callback — set via register_quoter_listener().
+        # Called with a FillEvent whenever a MM order is (partially or fully) matched.
+        self._fill_callback = None
+
+        # [ADDED] Step counter incremented externally via tick() to track order age.
+        self._current_step: int = 0
 
     @property
     def _df_bid_book(self):
@@ -82,8 +97,42 @@ class Order_book:
 
         return f"{global_book}\n{bid_book}\n{ask_book}"
 
+    # [ADDED] Register the Quoter's on_fill callback so the book can notify it on fills.
+    def register_quoter_listener(self, callback) -> None:
+        """
+        callback must match the signature: callback(FillEvent) -> None
+        Typically this is quoter.on_fill.
+        """
+        self._fill_callback = callback
+
+    # [ADDED] Called by the simulation loop at each step to age all resting MM orders.
+    def tick(self, step: int) -> None:
+        """Advance the internal step counter and increment age of all resting MM orders."""
+        self._current_step = step
+        for oid in self._mm_resting:
+            self._mm_resting[oid]["age"] += 1
+
+    # [ADDED] Expose resting MM order registry to the Quoter (read-only view).
+    @property
+    def mm_resting_orders(self) -> dict:
+        """
+        Returns a snapshot of all resting MM orders as:
+          {order_id: {"price": float, "direction": str, "level": int, "age": int}}
+        The Quoter uses this to decide which orders to cancel selectively.
+        """
+        return dict(self._mm_resting)
+
     def add_order(self, order: Order):
         self._df_order_book.loc[order._id] = order._dict_repr
+
+        # [ADDED] Track MM orders in the resting registry with age = 0
+        if order._origin == "market_maker":
+            self._mm_resting[order._id] = {
+                "price":     order._price,
+                "direction": order._direction,
+                "level":     order._level,
+                "age":       0,
+            }
 
     def generate_price_from_last(self, last_price, mu=1, sigma=0.05, order="buy"):
 
@@ -151,6 +200,9 @@ class Order_book:
         self._df_order_book = self._df_order_book.drop(
             index=[i for i in ids if i in self._df_order_book.index]
         )
+        # [ADDED] Keep resting registry in sync
+        for oid in ids:
+            self._mm_resting.pop(oid, None)
 
     def cancel_all_mm_orders(self):
         """Cancel all market maker orders (convenience for full repricing)."""
@@ -223,6 +275,7 @@ class Order_book:
                 cb_size = self._df_order_book.loc[cb_id, "Size"]
                 ma_size = self._df_order_book.loc[ma_id, "Size"]
                 matched_size = min(cb_size, ma_size)
+                ma_level = self._df_order_book.loc[ma_id, "Level"]
 
                 self._df_matches.loc[len(self._df_matches)] = {
                     "MatchId": _generate_order_id(),
@@ -239,8 +292,17 @@ class Order_book:
 
                 if self._df_order_book.loc[ma_id, "Size"] == 0:
                     self._df_order_book = self._df_order_book.drop(ma_id)
+                    # [ADDED] Remove from resting registry and notify the Quoter
+                    self._mm_resting.pop(ma_id, None)
+                    self._fire_fill(ma_id, "sell", ma_price, matched_size, ma_level, is_full_fill=True)
+
                 if cb_id in self._df_order_book.index and self._df_order_book.loc[cb_id, "Size"] == 0:
                     self._df_order_book = self._df_order_book.drop(cb_id)
+
+                # [ADDED] Partial fill on MM ask: fire fill event for the matched portion
+                # but leave the order in the book (not yet fully consumed)
+                elif ma_id in self._df_order_book.index and matched_size > 0:
+                    self._fire_fill(ma_id, "sell", ma_price, matched_size, ma_level, is_full_fill=False)
 
         # --- client sells vs MM bids ---
         client_sell_ids = self._df_order_book[
@@ -272,6 +334,7 @@ class Order_book:
                 cs_size = self._df_order_book.loc[cs_id, "Size"]
                 mb_size = self._df_order_book.loc[mb_id, "Size"]
                 matched_size = min(cs_size, mb_size)
+                mb_level = self._df_order_book.loc[mb_id, "Level"]
 
                 self._df_matches.loc[len(self._df_matches)] = {
                     "MatchId": _generate_order_id(),
@@ -288,5 +351,34 @@ class Order_book:
 
                 if self._df_order_book.loc[mb_id, "Size"] == 0:
                     self._df_order_book = self._df_order_book.drop(mb_id)
+                    # [ADDED] Remove from resting registry and notify the Quoter
+                    self._mm_resting.pop(mb_id, None)
+                    self._fire_fill(mb_id, "buy", mb_price, matched_size, mb_level, is_full_fill=True)
+
                 if cs_id in self._df_order_book.index and self._df_order_book.loc[cs_id, "Size"] == 0:
                     self._df_order_book = self._df_order_book.drop(cs_id)
+
+                # [ADDED] Partial fill on MM bid: fire fill event for the matched portion
+                elif mb_id in self._df_order_book.index and matched_size > 0:
+                    self._fire_fill(mb_id, "buy", mb_price, matched_size, mb_level, is_full_fill=False)
+
+    # [ADDED] Internal helper: fire a FillEvent to the registered Quoter callback.
+    def _fire_fill(self, order_id: str, direction: str, price: float, size: float, level: int, is_full_fill: bool) -> None:
+        """
+        Notify the Quoter that one of its resting orders was (partially or fully) matched.
+        Only fires if a callback has been registered via register_quoter_listener().
+        direction is the MM order direction ("buy" = MM bid was hit, "sell" = MM ask was hit).
+        level is the ladder level of the filled order (1 = best quote).
+        """
+        if self._fill_callback is None:
+            return
+
+        self._fill_callback(FillEvent(
+            order_id     = order_id,
+            direction    = direction,
+            price        = price,
+            size         = size,
+            step         = self._current_step,
+            level        = level,
+            is_full_fill = is_full_fill,
+        ))
