@@ -10,8 +10,8 @@
 # The paper uses A = Λ/α = 140, k = αK = 1.5 with δ in dollars (s≈100).
 # For FX (EUR/USD ≈ 1.10) we express δ in bps so k has the same
 # interpretive meaning: k=1.5 → half-life ≈ 0.46 bp.
-A_BUY  = 1.5         # buy-side arrival rate (per second at δ=0)
-A_SELL = 1.5          # sell-side arrival rate (can differ for asymmetry)
+A_BUY  = 12.0         # buy-side arrival rate (per second at δ=0)
+A_SELL = 12.0         # sell-side arrival rate (can differ for asymmetry)
 K_BUY  = 1.5          # buy decay rate per bp  (matches QuoterConfig.k)
 K_SELL = 1.5          # sell decay rate per bp
 

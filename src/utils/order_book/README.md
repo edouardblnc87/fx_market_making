@@ -51,8 +51,8 @@ Market maker orders only:
 | Method | Description |
 |--------|-------------|
 | `add_order(order)` | Add a single `Order` to the book |
-| `add_orders_batch(n, origin)` | Generate `n` random orders for the given origin, then run `_try_clear()` |
-| `_try_clear()` | Match client orders against MM orders (price-time priority, partial fills). Records matches in `_df_matches`, removes fully filled orders |
+| `add_orders_batch(orders)` | Add a list of `Order` objects to the book |
+| `try_clear()` | Match client orders against MM orders (price-time priority, partial fills). Records matches in `_df_matches`, removes fully filled orders |
 | `cancel_orders(ids)` | Remove specific orders by ID list |
 | `cancel_all_mm_orders()` | Remove all market maker orders (used before repricing) |
 
@@ -71,15 +71,18 @@ Market maker orders only:
 ob = Order_book()
 
 # 1. Market maker seeds the book
-ob.add_orders_batch(30, origin="market_maker")
+ob.add_orders_batch(mm_orders)
 
-# 2. Client batch arrives — matching runs automatically
-ob.add_orders_batch(10, origin="client")
+# 2. Client batch arrives
+ob.add_orders_batch(client_orders)
 
-# 3. Inspect matches
+# 3. Run clearing — matches crossing orders
+ob.try_clear()
+
+# 4. Inspect matches
 print(ob._df_matches)
 
-# 4. Market maker reprices
+# 5. Market maker reprices
 ob.cancel_all_mm_orders()
-ob.add_orders_batch(30, origin="market_maker")
+ob.add_orders_batch(new_mm_orders)
 ```
