@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Tuple, Callable, Optional
+from typing import List, Tuple, Callable, Optional, Set
 
 from ..order_book.order_book_impl import Order, Order_book
 from ..order_book.events import FillEvent
@@ -170,10 +170,10 @@ class Quoter:
         cancel_ids : IDs of resting MM orders to cancel before submitting.
         """
 
-        # Collect IDs of fully-filled orders — these must be replaced even if price hasn't moved.
+        # Collect IDs and exact (direction, level) slots of fully-filled orders.
         # Partial fills are NOT in _pending_fills, so their orders stay untouched here.
-        filled_ids  = {f.order_id  for f in self._pending_fills}
-        filled_sides = {f.direction for f in self._pending_fills}
+        filled_ids   = {f.order_id           for f in self._pending_fills}
+        filled_slots = {(f.direction, f.level) for f in self._pending_fills}
         self._pending_fills.clear()
 
         # ── Compute theoretical quotes
@@ -249,16 +249,19 @@ class Quoter:
 
         inventory_stressed = abs(inventory_ratio) > self.cfg.stale_inventory_fraction
 
-        cancel_ids: List[str] = []
+        cancel_ids:      List[str]            = []
+        cancelled_slots: Set[Tuple[str, int]] = set()   # (direction, level) pairs to rebuild
 
         for oid, info in resting_orders.items():
-            # Rule 1: filled orders must be replaced (already removed from book, but we track their side to ensure we requote it)
+            # Rule 1: filled orders must be replaced (already removed from book)
             if oid in filled_ids:
                 cancel_ids.append(oid)
+                cancelled_slots.add((info["direction"], info["level"]))
                 continue
 
             resting_price = info["price"]
             side          = info["direction"]
+            level         = info["level"]
             age           = info["age"]
 
             # New theoretical price for this side
@@ -267,14 +270,20 @@ class Quoter:
             # Rule 2: price has drifted beyond threshold
             if abs(resting_price - theo_price) > threshold:
                 cancel_ids.append(oid)
+                cancelled_slots.add((side, level))
                 continue
 
             # Rule 3: order is stale AND inventory is stressed
             if age > self.cfg.stale_steps and inventory_stressed:
                 cancel_ids.append(oid)
+                cancelled_slots.add((side, level))
 
-        # Only submit new quotes if there is something to cancel/replace OR a full fill happened
-        if not cancel_ids and not filled_sides:
+        # Also add slots from filled orders already removed from the book
+        # before compute_quotes was called (not in resting_orders anymore)
+        cancelled_slots |= filled_slots
+
+        # Only submit new quotes if there is something to cancel/replace
+        if not cancel_ids:
             if (self._prev_best_bid is not None
                     and abs(best_bid - self._prev_best_bid) <= threshold
                     and abs(best_ask - self._prev_best_ask) <= threshold):
@@ -283,7 +292,10 @@ class Quoter:
         self._prev_best_bid = best_bid
         self._prev_best_ask = best_ask
 
-        return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
+        # Surgical requote: only rebuild the exact (direction, level) slots that were cancelled.
+        # e.g. L1 ask filled → emit 1 new ask at L1 only, all other levels untouched.
+        # Session reset is the only case that rebuilds the full ladder.
+        return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, cancelled_slots), cancel_ids
 
     
     
@@ -400,7 +412,7 @@ class Quoter:
     #  PRIVATE HELPERS
 
     def _build_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float) -> List[Quote]:
-        """Build the 10-level bid/ask ladder with inventory-skewed sizing."""
+        """Build the full 10-level bid/ask ladder. Used only on session resets."""
         inventory_skew = np.clip(inventory_ratio, -1.0, 1.0)
         quotes: List[Quote] = []
         for i in range(1, self.cfg.n_levels + 1):
@@ -411,6 +423,25 @@ class Quoter:
             ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
             quotes.append(Quote("buy",  bid_price, bid_size, i))
             quotes.append(Quote("sell", ask_price, ask_size, i))
+        return quotes
+
+    def _build_partial_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float, slots: Set[Tuple[str, int]]) -> List[Quote]:
+        """
+        Surgical rebuild: only emit quotes for the exact (direction, level) slots cancelled.
+        e.g. slots={("sell", 1)} → returns a single new ask at level 1 only.
+        """
+        inventory_skew = np.clip(inventory_ratio, -1.0, 1.0)
+        quotes: List[Quote] = []
+        for i in range(1, self.cfg.n_levels + 1):
+            base_size = self.cfg.Q_base * np.exp(-self.cfg.beta * i)
+            if ("buy", i) in slots:
+                bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew), 2)
+                bid_price = self._snap_to_tick(best_bid - (i - 1) * self.cfg.tick_size)
+                quotes.append(Quote("buy", bid_price, bid_size, i))
+            if ("sell", i) in slots:
+                ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew), 2)
+                ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
+                quotes.append(Quote("sell", ask_price, ask_size, i))
         return quotes
 
     def _is_session_reset(self, t: float) -> bool:
