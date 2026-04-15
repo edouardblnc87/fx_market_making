@@ -156,3 +156,90 @@ def generate_heston_path(
         S = np.round(S / tick_size) * tick_size
 
     return S, v, vol_realized, dt, N
+
+
+def generate_garch_path(
+    time_grid:      np.ndarray,
+    S0:             float = 100.0,
+    drift:          float = 0.0,
+    vol_annualized: float = 0.20,
+    alpha:          float = 0.05,   # ARCH term  — weight on last squared innovation
+    beta:           float = 0.94,   # GARCH term — weight on last conditional variance
+    tick_size:      float = 0.0001,
+    lam:            float = 0.0,    # jump intensity (jumps/year); 0 = no jumps
+    mu_J:           float = 0.0,    # mean jump size in log-return units
+    sigma_J:        float = 0.005,  # jump size std in log-return units (~0.5% per jump)
+) -> tuple:
+    """
+    Simulate a GARCH(1,1) + Merton jump-diffusion price path.
+
+    Variance process (GARCH drives diffusion only — jumps are additive):
+        h[t+1] = ω + α·ε[t]² + β·h[t]
+        ε[t]   = √h[t] · Z[t],   Z[t] ~ N(0,1) i.i.d.
+
+    Jump process (Merton 1976):
+        N[t]  ~ Bernoulli(λ·dt_year)   — 0 or 1 jump per step
+        J[t]  ~ N(μ_J, σ_J²)           — jump size, fixed scale (not √dt)
+        jump contribution: N[t] · J[t]
+
+    Log-return at each step:
+        r[t] = drift·dt_year − h[t]/2 + ε[t] + N[t]·J[t]
+
+    The GARCH variance h is driven by ε only (diffusion), not by the jump.
+    This is the standard GARCH-Jump separation: the vol process reflects
+    clustering of normal moves; jumps are discrete, exogenous events.
+
+    Parameters
+    ----------
+    alpha   : ARCH term. Typical FX intraday: 0.05.
+    beta    : GARCH term. Typical FX intraday: 0.94. α+β must be < 1.
+    lam     : Jump intensity in jumps/year. 252*3 ≈ 756 gives ~3 jumps/day.
+              Set to 0 (default) to disable jumps.
+    mu_J    : Mean log-return jump size. 0 = symmetric (no directional bias).
+    sigma_J : Std of log-return jump size. 0.005 = ~0.5% price move per jump.
+
+    Returns
+    -------
+    S            : np.ndarray (N+1,) — price path
+    vol_realized : np.ndarray (N,)   — per-step diffusion innovations ε[t]
+    h            : np.ndarray (N+1,) — conditional variance path (per-step units)
+    dt           : float
+    N            : int
+    """
+    if alpha + beta >= 1.0:
+        raise ValueError(f"GARCH requires α+β < 1 for stationarity. Got {alpha+beta:.4f}.")
+
+    dt      = time_grid[1] - time_grid[0]
+    N       = len(time_grid) - 1
+    dt_year = dt / TRADING_SECONDS_PER_YEAR
+
+    sigma_step_sq = vol_annualized ** 2 * dt_year
+    omega         = sigma_step_sq * (1.0 - alpha - beta)
+
+    Z            = np.random.standard_normal(N)
+    h            = np.empty(N + 1)
+    h[0]         = sigma_step_sq
+    vol_realized = np.empty(N)
+    log_S        = np.empty(N + 1)
+    log_S[0]     = np.log(S0)
+
+    # ── Jump component ────────────────────────────────────────────────────────
+    if lam > 0:
+        jump_prob   = lam * dt_year                          # P(jump at step t)
+        jump_occurs = np.random.binomial(1, jump_prob, N)   # 0/1 per step
+        jump_sizes  = np.random.normal(mu_J, sigma_J, N)    # log-return jump size
+        jumps       = jump_occurs * jump_sizes
+    else:
+        jumps = np.zeros(N)
+
+    for t in range(N):
+        eps_t           = np.sqrt(h[t]) * Z[t]
+        vol_realized[t] = eps_t
+        log_S[t + 1]    = log_S[t] + drift * dt_year - 0.5 * h[t] + eps_t + jumps[t]
+        h[t + 1]        = omega + alpha * eps_t ** 2 + beta * h[t]  # jumps don't feed GARCH
+
+    S = np.exp(log_S)
+    if tick_size > 0:
+        S = np.round(S / tick_size) * tick_size
+
+    return S, vol_realized, h, dt, N
