@@ -1,2 +1,4 @@
 ORDER_DIRECTION = ["buy", "sell"]
-ORDER_TYPE = ["market_order"]
+ORDER_TYPE = [
+            # "market_order",
+               "limit_order"]
