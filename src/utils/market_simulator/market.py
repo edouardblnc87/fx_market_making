@@ -19,13 +19,18 @@ class Market(object):
         self.bid_price_adaptive: np.array | None = None
         self.ask_price_asym: np.array | None = None
         self.bid_price_asym: np.array | None = None
+        self.ask_price_skewed: np.array | None = None
+        self.bid_price_skewed: np.array | None = None
         # Realized vol arrays and window sizes stored for plotting
         self._rv_sto:      np.array | None = None
         self._rv_adaptive: np.array | None = None
         self._rv_asym:     np.array | None = None
+        self._rv_skewed:   np.array | None = None
         self._window_sto:      int | None = None
         self._window_adaptive: int | None = None
         self._window_asym:     int | None = None
+        self._window_skewed:   int | None = None
+        self._skew:        np.array | None = None
 
     def generate_noise(self, vol_factor: float):
         dt_frac = self.stock.time_step / TRADING_SECONDS_PER_YEAR
@@ -48,7 +53,7 @@ class Market(object):
 
         if self.noised_mid_price is None:
             print(f"Error, no prices generated for this market, run generate_noised_mid_price")
-        spread = self.noised_mid_price[0] * self.stock.tick_size * tick_factor/2
+        spread = self.noised_mid_price * self.stock.tick_size * tick_factor/2
         self.ask_price_constant = self.noised_mid_price + spread
         self.bid_price_constant = self.noised_mid_price - spread
 
@@ -57,7 +62,7 @@ class Market(object):
     def build_stochastic_spread(self, window_size = 50, alpha = 0.016, tick_factor = 100):
         # Baseline half-spread: price-adaptive (full array, not just t=0)
         # tick_factor controls the minimum spread width in ticks
-        spread_0 = self.noised_mid_price[0] * self.stock.tick_size * tick_factor / 2
+        spread_0 = self.noised_mid_price * self.stock.tick_size * tick_factor / 2
 
         # Annualized realized volatility, rolling window of `window_size` steps
         vol_realized = self.stock.compute_realized_volatility(window_size=window_size)
@@ -148,7 +153,7 @@ class Market(object):
         # Same formula as build_static_spread so all spreads share the same baseline:
         # half-spread = mid_price * tick_size * tick_factor / 2
         if s0 is None:
-            s0 = self.noised_mid_price[0] * self.stock.tick_size * tick_factor / 2
+            s0 = self.noised_mid_price * self.stock.tick_size * tick_factor / 2
 
         # ── Step 5: Alpha calibration ──────────────────────────────────────────
         # Default rule from doc section 12: a 2-sigma vol event doubles the spread
@@ -179,6 +184,92 @@ class Market(object):
         self.ask_price_asym = self.noised_mid_price + half_spread
         self.bid_price_asym = self.noised_mid_price - half_spread
 
+    def build_skewed_spread(
+        self,
+        window_size: int   = 600,
+        alpha:       float = 0.5,
+        gamma:       float = 0.3,
+        ema_span:    int   = 500,
+        threshold:   float = 1.5,
+        tick_factor: int   = 100,
+    ):
+        """
+        Build bid/ask with directional skew based on short-term momentum.
+
+        The spread width is vol-adaptive (same formula as the stochastic spread).
+        On top of that, the center of the quote shifts in the direction of recent
+        price moves via an EMA momentum signal with a dead-band threshold:
+
+            momentum(t)      = EMA of log-returns  (ema_span controls decay)
+            norm_mom(t)      = momentum(t) / rv_step(t)   # in units of step-sigmas
+            dead_band(t)     = max(|norm_mom| − threshold, 0) · sign(norm_mom)
+            skew(t)          = gamma · half_spread(t) · tanh(dead_band(t))
+            ask(t)           = mid(t) + half_spread(t) + skew(t)
+            bid(t)           = mid(t) − half_spread(t) + skew(t)
+
+        The dead-band means the skew is exactly zero unless the normalized momentum
+        exceeds `threshold` sigma — small random wiggles are ignored, only
+        directionally significant moves shift the quote.
+
+        Parameters
+        ----------
+        ema_span  : EMA lookback in steps. At dt=10ms, 500 steps = 5 seconds.
+        threshold : minimum signal strength (in EMA-sigmas) before skew activates.
+                    The signal is normalized so std≈1 under pure noise; default 1.5
+                    fires ~13% of the time under i.i.d. returns — visible asymmetry
+                    without excessive noise. Lower toward 1.0 for more activity,
+                    raise toward 3.0 to require jump-sized events only.
+        gamma     : max skew as a fraction of the half-spread, bounded by tanh.
+        """
+        dt = self.stock.time_step
+        N  = self.stock.n_steps
+
+        # --- Vol-adaptive half-spread width ---
+        rv_ann   = compute_rv_zero_mean(self.stock.simulation, window_size, dt)
+        spread_0 = self.noised_mid_price * self.stock.tick_size * tick_factor / 2
+
+        # Cap rv_ann at 3× the parametric vol before using it for the spread width.
+        # Without this, a single jump (e.g. 0.5% in 10ms) inflates the 600-step
+        # rolling RV to ~550% ann., blowing up half_spread and making bid/ask
+        # diverge symmetrically by several price units — the opposite of skewing.
+        rv_ann_capped = np.minimum(rv_ann, 3.0 * self.stock.vol)
+        half_spread   = spread_0 + alpha * rv_ann_capped
+
+        # --- EMA momentum signal ---
+        log_rets = np.diff(np.log(self.noised_mid_price))   # shape (N,)
+        a_ema    = 2.0 / (ema_span + 1)
+        ema      = np.empty(N)
+        ema[0]   = log_rets[0]
+        for t in range(1, N):
+            ema[t] = a_ema * log_rets[t] + (1.0 - a_ema) * ema[t - 1]
+
+        momentum    = np.empty(N + 1)
+        momentum[0] = 0.0
+        momentum[1:] = ema
+
+        # Normalize by parametric vol (constant), not rolling RV.
+        # Using rolling RV would inflate rv_ema at jump time, suppressing
+        # norm_momentum exactly when the skew should fire strongest.
+        # Parametric vol gives a stable noise floor: std≈1 under normal diffusion,
+        # and a jump log-return directly maps to a large norm_momentum value.
+        rv_step_ref = self.stock.vol / np.sqrt(TRADING_SECONDS_PER_YEAR / dt)
+        rv_ema      = rv_step_ref * np.sqrt(a_ema / (2.0 - a_ema))
+        norm_momentum = momentum / (rv_ema + 1e-12)
+
+        # Dead-band: subtract threshold, floor at zero, restore sign
+        # → skew is exactly 0 below threshold, rises smoothly above it
+        dead_band = np.sign(norm_momentum) * np.maximum(np.abs(norm_momentum) - threshold, 0.0)
+
+        # Skew bounded to ±gamma * half_spread via tanh
+        skew = gamma * half_spread * np.tanh(dead_band)
+
+        self._rv_skewed     = rv_ann
+        self._window_skewed = window_size
+        self._skew          = skew
+
+        self.ask_price_skewed = self.noised_mid_price + half_spread + skew
+        self.bid_price_skewed = self.noised_mid_price - half_spread + skew
+
     def build_spread(self, option = "Static", **kwargs):
         if option == "Static":
             self.build_static_spread(**kwargs)
@@ -188,6 +279,8 @@ class Market(object):
             self.build_adaptive_spread(**kwargs)
         if option == "Asym":
             self.build_asymmetric_spread(**kwargs)
+        if option == "Skew":
+            self.build_skewed_spread(**kwargs)
 
 
 
@@ -206,7 +299,7 @@ class Market(object):
             print("Noised mid price not computed — run generate_noised_mid_price first.")
             return
 
-        valid = {"static", "sto", "adaptive", "asym"}
+        valid = {"static", "sto", "adaptive", "asym", "skew"}
         if series is None:
             show = valid
         else:
@@ -244,7 +337,12 @@ class Market(object):
             ax.plot(t, self.bid_price_asym, linewidth=0.6, color="#00ddff", linestyle="-.", label="Bid (asym)")
             ax.fill_between(t, self.bid_price_asym, self.ask_price_asym, color="#ff8800", alpha=0.06)
 
-        if any(x is not None for x in [self.ask_price_constant, self.ask_price_sto, self.ask_price_adaptive, self.ask_price_asym]):
+        if "skew" in show and self.ask_price_skewed is not None and self.bid_price_skewed is not None:
+            ax.plot(t, self.ask_price_skewed, linewidth=0.6, color="#ff44aa", linestyle=(0, (3, 1, 1, 1)), label="Ask (skew)")
+            ax.plot(t, self.bid_price_skewed, linewidth=0.6, color="#44ffcc", linestyle=(0, (3, 1, 1, 1)), label="Bid (skew)")
+            ax.fill_between(t, self.bid_price_skewed, self.ask_price_skewed, color="#ff44aa", alpha=0.06)
+
+        if any(x is not None for x in [self.ask_price_constant, self.ask_price_sto, self.ask_price_adaptive, self.ask_price_asym, self.ask_price_skewed]):
             ax.legend(facecolor="#222222", edgecolor="#444444", labelcolor="white", fontsize=10)
 
         ax.set_title("Noised Mid Price", color="white", fontsize=14, pad=12)
@@ -271,14 +369,16 @@ class Market(object):
         has_sto      = self.ask_price_sto is not None and self.bid_price_sto is not None
         has_adaptive = self.ask_price_adaptive is not None and self.bid_price_adaptive is not None
         has_asym     = self.ask_price_asym is not None and self.bid_price_asym is not None
+        has_skewed   = self.ask_price_skewed is not None and self.bid_price_skewed is not None
 
-        if not has_static and not has_sto and not has_adaptive and not has_asym:
-            print("No bid/ask series generated — run build_static_spread, build_stochastic_spread, build_adaptive_spread, or build_asymmetric_spread first.")
+        if not has_static and not has_sto and not has_adaptive and not has_asym and not has_skewed:
+            print("No bid/ask series generated — run build_static_spread, build_stochastic_spread, build_adaptive_spread, build_asymmetric_spread, or build_skewed_spread first.")
             return
 
-        # 2 fixed panels (ask, bid) + one width panel per available spread
-        n_width = sum([has_static, has_sto, has_adaptive, has_asym])
-        n_rows  = 2 + n_width
+        # 2 fixed panels (ask, bid) + one width panel per spread + 1 skew panel if skewed
+        n_width = sum([has_static, has_sto, has_adaptive, has_asym, has_skewed])
+        n_extra = 1 if has_skewed else 0
+        n_rows  = 2 + n_width + n_extra
 
         t = self._time_grid / 3600
 
@@ -286,7 +386,8 @@ class Market(object):
         fig.patch.set_facecolor("#111111")
 
         ax_ask, ax_bid = axes[0], axes[1]
-        width_axes = axes[2:]  # one per active spread, in order: static → sto → adaptive
+        width_axes = axes[2:2 + n_width]
+        skew_ax    = axes[-1] if has_skewed else None
 
         for ax in axes:
             ax.set_facecolor("#111111")
@@ -384,6 +485,27 @@ class Market(object):
             ax_w.legend(loc="upper left", facecolor="#222222", edgecolor="#444444", labelcolor="white", fontsize=9)
             if self._rv_asym is not None:
                 _add_vol_overlay(ax_w, self.ask_price_asym - self.bid_price_asym, self._rv_asym, self._window_asym, "#ffe033")
+            width_idx += 1
+
+        if has_skewed:
+            ax_ask.plot(t, self.ask_price_skewed, linewidth=0.8, color="#ff44aa", linestyle=(0, (3, 1, 1, 1)), label="Ask (skew)")
+            ax_bid.plot(t, self.bid_price_skewed, linewidth=0.8, color="#44ffcc", linestyle=(0, (3, 1, 1, 1)), label="Bid (skew)")
+            ax_w = width_axes[width_idx]
+            width = self.ask_price_skewed - self.bid_price_skewed
+            ax_w.plot(t, width, linewidth=0.8, color="#ff44aa", linestyle=(0, (3, 1, 1, 1)), label="Width (skew)")
+            ax_w.set_title("Spread width — Skewed (ask − bid)", color="white", fontsize=13, pad=10)
+            ax_w.set_ylabel("Width", color="white", fontsize=12)
+            ax_w.legend(loc="upper left", facecolor="#222222", edgecolor="#444444", labelcolor="white", fontsize=9)
+            if self._rv_skewed is not None:
+                _add_vol_overlay(ax_w, width, self._rv_skewed, self._window_skewed, "#ffe033")
+
+            # Dedicated skew panel (last axis)
+            skew = self._skew if self._skew is not None else np.zeros(len(t))
+            skew_ax.plot(t, skew, linewidth=0.8, color="#44ffcc", label="Skew δ(t)")
+            skew_ax.axhline(0, color="#888888", linewidth=0.6, linestyle="--")
+            skew_ax.set_title("Quote skew δ(t) — reservation price shift", color="white", fontsize=13, pad=10)
+            skew_ax.set_ylabel("δ (price units)", color="white", fontsize=11)
+            skew_ax.legend(loc="upper left", facecolor="#222222", edgecolor="#444444", labelcolor="white", fontsize=9)
 
         ax_ask.set_title("Ask prices", color="white", fontsize=13, pad=10)
         ax_ask.set_ylabel("Price", color="white", fontsize=12)
@@ -488,6 +610,8 @@ class Market(object):
             pairs["Adaptive"] = (self.ask_price_adaptive, self.bid_price_adaptive)
         if self.ask_price_asym is not None and self.bid_price_asym is not None:
             pairs["Asymmetric"] = (self.ask_price_asym, self.bid_price_asym)
+        if self.ask_price_skewed is not None and self.bid_price_skewed is not None:
+            pairs["Skewed"] = (self.ask_price_skewed, self.bid_price_skewed)
 
         if not pairs:
             print("No bid/ask series generated yet — run build_static_spread, build_stochastic_spread, build_adaptive_spread, or build_asymmetric_spread first.")
@@ -523,6 +647,12 @@ class Market(object):
         row("Bid bias vs mid (mean)",        [bid_bias[k] for k in pairs])
         rowpct("Ask vol (ann., log-ret)",    [ask_vols[k] for k in pairs])
         rowpct("Bid vol (ann., log-ret)",    [bid_vols[k] for k in pairs])
+        # Skew diagnostics: for symmetric spreads ask_bias == bid_bias; for the
+        # skewed spread they differ, and the center = 0.5*(ask+bid) drifts away from mid
+        center_skew = {k: np.mean(0.5 * (ask + bid) - mid) for k, (ask, bid) in pairs.items()}
+        ask_minus_bid_bias = {k: ask_bias[k] - bid_bias[k] for k in pairs}
+        row("Quote center offset (mean)",    [center_skew[k]         for k in pairs])
+        row("Ask half − Bid half (mean)",    [ask_minus_bid_bias[k]  for k in pairs])
         print("─" * 76)
 
 
