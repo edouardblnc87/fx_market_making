@@ -47,12 +47,13 @@ class Order:
 
 class Order_book:
 
-    def __init__(self, spread_init=0.1):
+    def __init__(self, spread_init=0.1, n_levels: int = 10):
 
         #initial spread when randomly initializing the order book
         self._spread_init = spread_init
+        self.n_levels = n_levels
         self._df_order_book = pd.DataFrame(columns=["Id", "Direction", "Price", "Size", "Type", "Origin", "Level", "Time"])
-        self._df_matches = pd.DataFrame(columns=["MatchId", "ClientOrderId", "MmOrderId", "Direction", "Price", "MatchedSize", "Time"])
+        self._df_matches = pd.DataFrame(columns=["MatchId", "ClientOrderId", "MmOrderId", "Direction", "Price", "MatchedSize", "Level", "Step", "Time"])
 
         self._listener = []
 
@@ -132,10 +133,12 @@ class Order_book:
         # [ADDED] Track MM orders in the resting registry with age = 0
         if order._origin == "market_maker":
             self._mm_resting[order._id] = {
-                "price":     order._price,
-                "direction": order._direction,
-                "level":     order._level,
-                "age":       0,
+                "price":          order._price,
+                "direction":      order._direction,
+                "level":          order._level,
+                "age":            0,
+                "original_size":  order._size,
+                "remaining_size": order._size,
             }
 
     def generate_price_from_last(self, last_price, mu=1, sigma=0.05, order="buy"):
@@ -271,33 +274,24 @@ class Order_book:
             orders.append(Order(_generate_order_id(), direction, round(new_price, 4), size, order_type, origin))
         return orders
 
-    def submit_mm_quotes(self, quotes: list):
+    def post_mm_quotes(self, quotes: list):
         """
-        Add market-maker quote orders to the book WITHOUT triggering matching.
-
-        MM orders should only be matched when a client order arrives.
-        Calling _try_clear() here would let MM bids cross MM asks if the
-        ladder is wide enough, which is wrong.  Use this method for all
-        quoter output; use add_orders_batch() only for client order batches.
-
-        Parameters
-        ----------
-        quotes : list of Order objects (origin must be "market_maker").
+        Post market-maker quote orders to the book WITHOUT triggering matching.
+        MM orders are only matched when a client order arrives via route_client_order().
         """
         for order in quotes:
             self.add_order(order)
-        # No _try_clear() here — matching happens in submit_client_order()
 
-    def submit_client_order(self, order):
+    def route_client_order(self, order):
         """
         Add a single client order and immediately attempt matching against
-        resting MM quotes.  This is the correct place to trigger _try_clear().
+        resting MM quotes.
         """
         self.add_order(order)
-        self._try_clear()
+        self.try_clear()
 
-    def add_orders_batch(self, orders: list):
-        """Add a list of Order objects to the book."""
+    def _add_orders_batch(self, orders: list):
+        """Internal utility: add a list of Order objects without triggering matching."""
         for order in tqdm(orders, desc="Adding orders"):
             self.add_order(order)
 
@@ -343,6 +337,8 @@ class Order_book:
                     "Direction": "buy",
                     "Price": ma_price,
                     "MatchedSize": matched_size,
+                    "Level": ma_level,
+                    "Step": self._current_step,
                     "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 }
 
@@ -354,14 +350,12 @@ class Order_book:
                     # [ADDED] Remove from resting registry and notify the Quoter
                     self._mm_resting.pop(ma_id, None)
                     self._fire_fill(ma_id, "sell", ma_price, matched_size, ma_level, is_full_fill=True)
+                elif matched_size > 0:
+                    # [ADDED] Partial fill on MM ask — fire regardless of client order state
+                    self._fire_fill(ma_id, "sell", ma_price, matched_size, ma_level, is_full_fill=False)
 
                 if cb_id in self._df_order_book.index and self._df_order_book.loc[cb_id, "Size"] == 0:
                     self._df_order_book = self._df_order_book.drop(cb_id)
-
-                # [ADDED] Partial fill on MM ask: fire fill event for the matched portion
-                # but leave the order in the book (not yet fully consumed)
-                elif ma_id in self._df_order_book.index and matched_size > 0:
-                    self._fire_fill(ma_id, "sell", ma_price, matched_size, ma_level, is_full_fill=False)
 
         # --- client sells vs MM bids ---
         client_sell_ids = self._df_order_book[
@@ -402,6 +396,8 @@ class Order_book:
                     "Direction": "sell",
                     "Price": mb_price,
                     "MatchedSize": matched_size,
+                    "Level": mb_level,
+                    "Step": self._current_step,
                     "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 }
 
@@ -413,13 +409,12 @@ class Order_book:
                     # [ADDED] Remove from resting registry and notify the Quoter
                     self._mm_resting.pop(mb_id, None)
                     self._fire_fill(mb_id, "buy", mb_price, matched_size, mb_level, is_full_fill=True)
+                elif matched_size > 0:
+                    # [ADDED] Partial fill on MM bid — fire regardless of client order state
+                    self._fire_fill(mb_id, "buy", mb_price, matched_size, mb_level, is_full_fill=False)
 
                 if cs_id in self._df_order_book.index and self._df_order_book.loc[cs_id, "Size"] == 0:
                     self._df_order_book = self._df_order_book.drop(cs_id)
-
-                # [ADDED] Partial fill on MM bid: fire fill event for the matched portion
-                elif mb_id in self._df_order_book.index and matched_size > 0:
-                    self._fire_fill(mb_id, "buy", mb_price, matched_size, mb_level, is_full_fill=False)
 
     # [ADDED] Internal helper: fire a FillEvent to the registered Quoter callback.
     def _fire_fill(self, order_id: str, direction: str, price: float, size: float, level: int, is_full_fill: bool) -> None:
@@ -429,6 +424,9 @@ class Order_book:
         direction is the MM order direction ("buy" = MM bid was hit, "sell" = MM ask was hit).
         level is the ladder level of the filled order (1 = best quote).
         """
+        if not is_full_fill and order_id in self._mm_resting:
+            self._mm_resting[order_id]["remaining_size"] -= size
+
         if self._fill_callback is None:
             return
 
