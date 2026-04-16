@@ -4,7 +4,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Tuple, Callable, Optional, Set
 
-from ..order_book.order_book_impl import Order, Order_book
+from ..order_book.order_book_impl import Order, Order_book, generate_order_id
 from ..order_book.events import FillEvent
 from ..market_simulator.market import Market
 from ..stock_simulation.config import TRADING_SECONDS_PER_YEAR
@@ -72,14 +72,6 @@ class QuoterConfig:
     fee_B_taker: float = 0.0002
     fee_C_maker: float = 0.00009
     fee_C_taker: float = 0.0003
-
-
-@dataclass
-class Quote:
-    direction: str
-    price:     float
-    size:      float
-    level:     int
 
 
 class Quoter:
@@ -167,7 +159,7 @@ class Quoter:
     
     #  MAIN QUOTING FUNCTION
 
-    def compute_quotes(self, step: int, t: float, resting_orders: dict) -> Tuple[List[Quote], List[str]]:
+    def compute_quotes(self, step: int, t: float, resting_orders: dict) -> Tuple[List[Order], List[str]]:
         """
         Compute the MM quote ladder and decide which resting orders to cancel/replace.
 
@@ -413,38 +405,38 @@ class Quoter:
     
     #  PRIVATE HELPERS
 
-    def _build_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float) -> List[Quote]:
+    def _build_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float) -> List[Order]:
         """Build the full 10-level bid/ask ladder. Used only on session resets."""
         inventory_skew = np.clip(inventory_ratio, -1.0, 1.0)
-        quotes: List[Quote] = []
+        orders: List[Order] = []
         for i in range(1, self.cfg.n_levels + 1):
             base_size = self.cfg.Q_base * np.exp(-self.cfg.beta * i)
             bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew), 2)
             ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew), 2)
             bid_price = self._snap_to_tick(best_bid - (i - 1) * self.cfg.tick_size)
             ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
-            quotes.append(Quote("buy",  bid_price, bid_size, i))
-            quotes.append(Quote("sell", ask_price, ask_size, i))
-        return quotes
+            orders.append(Order(generate_order_id(), "buy",  bid_price, bid_size, "limit_order", "market_maker", i))
+            orders.append(Order(generate_order_id(), "sell", ask_price, ask_size, "limit_order", "market_maker", i))
+        return orders
 
-    def _build_partial_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float, slots: Set[Tuple[str, int]]) -> List[Quote]:
+    def _build_partial_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float, slots: Set[Tuple[str, int]]) -> List[Order]:
         """
         Surgical rebuild: only emit quotes for the exact (direction, level) slots cancelled.
         e.g. slots={("sell", 1)} → returns a single new ask at level 1 only.
         """
         inventory_skew = np.clip(inventory_ratio, -1.0, 1.0)
-        quotes: List[Quote] = []
+        orders: List[Order] = []
         for i in range(1, self.cfg.n_levels + 1):
             base_size = self.cfg.Q_base * np.exp(-self.cfg.beta * i)
             if ("buy", i) in slots:
                 bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew), 2)
                 bid_price = self._snap_to_tick(best_bid - (i - 1) * self.cfg.tick_size)
-                quotes.append(Quote("buy", bid_price, bid_size, i))
+                orders.append(Order(generate_order_id(), "buy",  bid_price, bid_size, "limit_order", "market_maker", i))
             if ("sell", i) in slots:
                 ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew), 2)
                 ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
-                quotes.append(Quote("sell", ask_price, ask_size, i))
-        return quotes
+                orders.append(Order(generate_order_id(), "sell", ask_price, ask_size, "limit_order", "market_maker", i))
+        return orders
 
     def _is_session_reset(self, t: float) -> bool:
         """
