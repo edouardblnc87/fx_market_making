@@ -1,1 +1,1 @@
-from .quoter import Quoter, QuoterConfig, Quote
+from .quoter import Quoter, QuoterConfig
