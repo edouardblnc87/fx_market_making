@@ -47,10 +47,11 @@ class Order:
 
 class Order_book:
 
-    def __init__(self, spread_init=0.1):
+    def __init__(self, spread_init=0.1, n_levels: int = 10):
 
         #initial spread when randomly initializing the order book
         self._spread_init = spread_init
+        self.n_levels = n_levels
         self._df_order_book = pd.DataFrame(columns=["Id", "Direction", "Price", "Size", "Type", "Origin", "Level", "Time"])
         self._df_matches = pd.DataFrame(columns=["MatchId", "ClientOrderId", "MmOrderId", "Direction", "Price", "MatchedSize", "Level", "Step", "Time"])
 
