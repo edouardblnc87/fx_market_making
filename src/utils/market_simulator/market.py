@@ -31,6 +31,7 @@ class Market(object):
         self._window_asym:     int | None = None
         self._window_skewed:   int | None = None
         self._skew:        np.array | None = None
+        self._active_spread: str | None = None
 
     def generate_noise(self, vol_factor: float):
         dt_frac = self.stock.time_step / TRADING_SECONDS_PER_YEAR
@@ -56,6 +57,7 @@ class Market(object):
         spread = self.noised_mid_price * self.stock.tick_size * tick_factor/2
         self.ask_price_constant = self.noised_mid_price + spread
         self.bid_price_constant = self.noised_mid_price - spread
+        self._active_spread = "Static"
 
 
     
@@ -81,6 +83,7 @@ class Market(object):
 
         self.ask_price_sto = self.noised_mid_price + spread
         self.bid_price_sto = self.noised_mid_price - spread
+        self._active_spread = "Sto"
 
     def build_adaptive_spread(self, window_size=50, alpha=0.016, tick_factor=100):
         # Baseline half-spread: same price-adaptive anchor as the stochastic spread
@@ -109,6 +112,7 @@ class Market(object):
 
         self.ask_price_adaptive = self.noised_mid_price + spread
         self.bid_price_adaptive = self.noised_mid_price - spread
+        self._active_spread = "Adaptive"
 
     def build_asymmetric_spread(
         self,
@@ -183,6 +187,7 @@ class Market(object):
         # ── Step 9: Bid and ask centered on the noised mid price ───────────────
         self.ask_price_asym = self.noised_mid_price + half_spread
         self.bid_price_asym = self.noised_mid_price - half_spread
+        self._active_spread = "Asym"
 
     def build_skewed_spread(
         self,
@@ -269,6 +274,35 @@ class Market(object):
 
         self.ask_price_skewed = self.noised_mid_price + half_spread + skew
         self.bid_price_skewed = self.noised_mid_price - half_spread + skew
+        self._active_spread = "Skew"
+
+    @property
+    def bid_price(self) -> np.array:
+        """Active bid price array — whichever spread was last built."""
+        mapping = {
+            "Static": self.bid_price_constant,
+            "Sto": self.bid_price_sto,
+            "Adaptive": self.bid_price_adaptive,
+            "Asym": self.bid_price_asym,
+            "Skew": self.bid_price_skewed,
+        }
+        if self._active_spread not in mapping or mapping[self._active_spread] is None:
+            raise ValueError("No spread built yet. Call build_spread() first.")
+        return mapping[self._active_spread]
+
+    @property
+    def ask_price(self) -> np.array:
+        """Active ask price array — whichever spread was last built."""
+        mapping = {
+            "Static": self.ask_price_constant,
+            "Sto": self.ask_price_sto,
+            "Adaptive": self.ask_price_adaptive,
+            "Asym": self.ask_price_asym,
+            "Skew": self.ask_price_skewed,
+        }
+        if self._active_spread not in mapping or mapping[self._active_spread] is None:
+            raise ValueError("No spread built yet. Call build_spread() first.")
+        return mapping[self._active_spread]
 
     def build_spread(self, option = "Static", **kwargs):
         if option == "Static":

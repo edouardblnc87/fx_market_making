@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from dataclasses import dataclass, field
 from typing import List, Tuple, Callable, Optional, Set
 
@@ -95,6 +96,9 @@ class Quoter:
         # Pending fills received from the OrderBook since last compute_quotes() call
         self._pending_fills: List[FillEvent] = []
 
+        # Partial fills pending a top-up (restore level to original size)
+        self._pending_topups: List[FillEvent] = []
+
         # Fill log for diagnostics
         self._fill_history: List[dict] = []
 
@@ -118,6 +122,7 @@ class Quoter:
         self._flow_history: List[str] = []
 
         dt = market_B.stock.time_step
+        self._dt: float = dt
         self._lag_B: int = max(1, round(self.cfg.latency_B_s / dt))
         self._lag_C: int = max(1, round(self.cfg.latency_C_s / dt))
 
@@ -138,12 +143,32 @@ class Quoter:
         # Inventory update always applies regardless of partial/full
         delta_q = event.size if event.direction == "buy" else -event.size
         self.inventory += delta_q
+
+        t_fill = event.step * self._dt
+        mid_B = (float(self.market_B.bid_price[event.step]) + float(self.market_B.ask_price[event.step])) / 2.0
+        mid_C = (float(self.market_C.bid_price[event.step]) + float(self.market_C.ask_price[event.step])) / 2.0
+        fair_mid = self.cfg.weight_B * mid_B + self.cfg.weight_C * mid_C
+        fee_cost = event.size * event.price * self.cfg.fee_A_maker
+        # MM perspective: sell fill = cash in, buy fill = cash out — fees proportional to notional
+        cash_flow = (event.size * event.price * (1.0 - self.cfg.fee_A_maker)
+                     if event.direction == "sell"
+                     else -event.size * event.price * (1.0 + self.cfg.fee_A_maker))
+
         self._fill_history.append({
-            "step":         event.step,
-            "direction":    event.direction,
-            "price":        event.price,
-            "size":         event.size,
+            "order_id": event.order_id,
+            "level": event.level,
+            "step": event.step,
+            "t": t_fill,
+            "direction": event.direction,
+            "price": event.price,
+            "size": event.size,
             "is_full_fill": event.is_full_fill,
+            "fair_mid": fair_mid,
+            "fee_cost": fee_cost,
+            "cash_flow": cash_flow,
+            "inventory_after": self.inventory,
+            "is_hedge": False,
+            "venue": "A",
         })
 
         # Track flow direction for the imbalance signal (rolling window)
@@ -151,9 +176,12 @@ class Quoter:
         if len(self._flow_history) > self.cfg.imbalance_window:
             self._flow_history.pop(0)
 
-        # Only force a requote if the order is fully consumed
+        # Full fill → slot is empty, must re-quote that level
         if event.is_full_fill:
             self._pending_fills.append(event)
+        else:
+            # Partial fill → order still resting but undersized, queue a top-up
+            self._pending_topups.append(event)
 
 
     
@@ -185,9 +213,13 @@ class Quoter:
         6. Nothing triggered         -> return [], [] (no action).
         """
 
-        # ── Step 1: drain the fill queue (accumulated since last call via on_fill)
+        # ── Step 1: drain both fill queues (accumulated since last call via on_fill)
         filled_slots = {(f.direction, f.level) for f in self._pending_fills}
         self._pending_fills.clear()
+
+        # Deduplicate partial fills by order_id — only one top-up needed per order
+        topup_ids = {e.order_id for e in self._pending_topups}
+        self._pending_topups.clear()
 
         # ── Step 2: compute current theoretical best bid and ask
         bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
@@ -266,13 +298,15 @@ class Quoter:
             self._prev_best_ask = best_ask
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
-        # ── Priority 4: some slots were fully filled — replace only those slots
-        # filled_slots contains (direction, level) pairs from on_fill() callbacks.
-        # The orders are already gone from the book — no cancel needed, just re-emit.
-        if filled_slots:
+        # ── Priority 4: full fills + partial top-ups — handle both in one pass
+        # Full fills:   slot is gone, re-emit a fresh order at the new best price.
+        # Partial fills: slot still resting but undersized — add a complementary order
+        #                at the SAME price to restore the original size, no cancel needed.
+        topup_orders = self._build_topups(resting_orders, topup_ids)
+        if filled_slots or topup_orders:
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
-            return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, filled_slots), []
+            return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, filled_slots) + topup_orders, []
 
         # ── Priority 5: stale orders with stressed inventory — cancel and reprice those slots
         inventory_stressed = abs(inventory_ratio) > self.cfg.stale_inventory_fraction
@@ -299,7 +333,8 @@ class Quoter:
         return abs(self.inventory) / self.capital_K > self.cfg.delta_limit
 
     def hedge_order(self, market_B_depth: float, market_C_depth: float, fair_mid: float) -> Tuple[float, float, float]:
-        total_size    = -self.inventory
+        # Target flat (inventory=0) = 50% EUR / 50% USD
+        total_size = -self.inventory
         impact_factor = fair_mid * 0.0001
 
         score_B = (1.0 / (self.cfg.fee_B_taker + impact_factor / market_B_depth)
@@ -322,7 +357,56 @@ class Quoter:
     def fill_cost(self, size: float, fair_mid: float) -> float:
         return abs(size) * self.cfg.fee_A_maker * fair_mid
 
-    
+    def execute_hedge(self, step: int, t: float, fair_mid: float) -> bool:
+        """
+        If inventory is at critical level, execute optimal hedge across B and C.
+        Records each leg as a trade in _fill_history with is_hedge=True and venue="B"/"C".
+        Returns True if a hedge was executed.
+
+        B and C are assumed to be deep reference markets — depth defaulted to 1_000_000.
+        """
+        if not self.needs_hedge():
+            return False
+
+        size_B, size_C, _ = self.hedge_order(
+            market_B_depth=1_000_000.0,
+            market_C_depth=1_000_000.0,
+            fair_mid=fair_mid,
+        )
+
+        for size, venue, fee_rate in [
+            (size_B, "B", self.cfg.fee_B_taker),
+            (size_C, "C", self.cfg.fee_C_taker),
+        ]:
+            if size == 0.0:
+                continue
+            abs_size = abs(size)
+            direction = "buy" if size > 0 else "sell"
+            fee_cost = abs_size * fair_mid * fee_rate
+            cash_flow = (-abs_size * fair_mid * (1.0 + fee_rate)
+                         if size > 0
+                         else abs_size * fair_mid * (1.0 - fee_rate))
+            self.inventory += size
+            self._fill_history.append({
+                "order_id": None,
+                "level": 0,
+                "step": step,
+                "t": t,
+                "direction": direction,
+                "price": fair_mid,
+                "size": abs_size,
+                "is_full_fill": True,
+                "fair_mid": fair_mid,
+                "fee_cost": fee_cost,
+                "cash_flow": cash_flow,
+                "inventory_after": self.inventory,
+                "is_hedge": True,
+                "venue": venue,
+            })
+
+        return True
+
+
 
     #  DIAGNOSTICS
 
@@ -401,8 +485,17 @@ class Quoter:
             "imbalance":          imbalance,
         }
 
-    
-    
+    @property
+    def trade_history(self):
+        """All fills (partial + full) as a DataFrame. Use for P&L analysis."""
+        if not self._fill_history:
+            return pd.DataFrame(columns=["order_id", "level", "step", "t", "direction",
+                                         "price", "size", "is_full_fill", "fair_mid",
+                                         "fee_cost", "cash_flow", "inventory_after",
+                                         "is_hedge", "venue"])
+        return pd.DataFrame(self._fill_history)
+
+
     #  PRIVATE HELPERS
 
     def _build_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float) -> List[Order]:
@@ -411,8 +504,8 @@ class Quoter:
         orders: List[Order] = []
         for i in range(1, self.cfg.n_levels + 1):
             base_size = self.cfg.Q_base * np.exp(-self.cfg.beta * i)
-            bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew), 2)
-            ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew), 2)
+            bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew))
+            ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew))
             bid_price = self._snap_to_tick(best_bid - (i - 1) * self.cfg.tick_size)
             ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
             orders.append(Order(generate_order_id(), "buy",  bid_price, bid_size, "limit_order", "market_maker", i))
@@ -429,13 +522,38 @@ class Quoter:
         for i in range(1, self.cfg.n_levels + 1):
             base_size = self.cfg.Q_base * np.exp(-self.cfg.beta * i)
             if ("buy", i) in slots:
-                bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew), 2)
+                bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew))
                 bid_price = self._snap_to_tick(best_bid - (i - 1) * self.cfg.tick_size)
                 orders.append(Order(generate_order_id(), "buy",  bid_price, bid_size, "limit_order", "market_maker", i))
             if ("sell", i) in slots:
-                ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew), 2)
+                ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew))
                 ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
                 orders.append(Order(generate_order_id(), "sell", ask_price, ask_size, "limit_order", "market_maker", i))
+        return orders
+
+    def _build_topups(self, resting_orders: dict, order_ids: set) -> List[Order]:
+        """
+        For each partially filled order still resting, emit a complementary order
+        at the same price for the missing size (original_size - remaining_size).
+        No cancel is needed — this just tops the level back up to its original depth.
+        """
+        orders: List[Order] = []
+        for oid in order_ids:
+            if oid not in resting_orders:
+                continue  # order fully consumed between partial fires, or already cancelled
+            info = resting_orders[oid]
+            topup_size = round(info["original_size"] - info["remaining_size"])
+            if topup_size <= 0:
+                continue
+            orders.append(Order(
+                generate_order_id(),
+                info["direction"],
+                info["price"],
+                topup_size,
+                "limit_order",
+                "market_maker",
+                info["level"],
+            ))
         return orders
 
     def _is_session_reset(self, t: float) -> bool:
@@ -453,7 +571,6 @@ class Quoter:
         if step < self.cfg.vol_window:
             return self.market_B.stock.vol
 
-        import pandas as pd
         start    = max(0, step - self.cfg.vol_window)
         prices   = self.market_B.noised_mid_price[start:step]
         log_rets = np.diff(np.log(prices))
@@ -465,8 +582,7 @@ class Quoter:
 
     def _get_stale_quotes(self, market: Market, step: int, lag: int) -> Tuple[float, float]:
         stale_step = max(0, step - lag)
-        #return float(market.bid_price[stale_step]), float(market.ask_price[stale_step])
-        return float(market.bid_price_skewed[stale_step]), float(market.ask_price_skewed[stale_step])
+        return float(market.bid_price[stale_step]), float(market.ask_price[stale_step])
 
     def _compute_imbalance(self) -> float:
         """
