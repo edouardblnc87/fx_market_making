@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -105,6 +106,36 @@ class PnLTracker:
         if df.empty:
             return 0.0
         return float(df['inventory_after'].iloc[-1]) * current_mid
+
+    @staticmethod
+    def per_trade_mtm_evolution(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Decompose the aggregate MtM into per-fill contributions at each fill time.
+
+        Returns DataFrame shape (n_fills, n_fills):
+          - index   = fill evaluation times (df['t'] values)
+          - columns = fill index 0 .. n-1
+          - value[j, i] = cash_flow_i + Δinv_i × fair_mid_j   for j >= i, else NaN
+
+        Identity: ev.sum(axis=1) == augment(df)['mtm_pnl']  (element-wise, to float precision)
+
+        Interpretation
+        --------------
+        At inception (j == i): value ≈ inception_spread_i − fee_i  (locked spread net of cost)
+        Afterwards     (j > i): value tracks how the trade's open inventory is marked to market
+                                as fair_mid evolves — positive drift means the fill is in profit,
+                                negative drift means adverse selection.
+        """
+        if df.empty:
+            return pd.DataFrame()
+        inv_delta = df['inventory_after'].diff().fillna(df['inventory_after'].iloc[0]).values
+        cash = df['cash_flow'].values
+        mids = df['fair_mid'].values
+        n = len(df)
+        mat = np.full((n, n), np.nan)
+        for i in range(n):
+            mat[i:, i] = cash[i] + inv_delta[i] * mids[i:]
+        return pd.DataFrame(mat, index=df['t'].values, columns=range(n))
 
     @staticmethod
     def report(df: pd.DataFrame, current_mid: float) -> dict:
@@ -265,6 +296,85 @@ class PnLTracker:
         axes[3].set_ylabel('USD', color='white')
         axes[3].set_xlabel('Time (s)', color='white')
         axes[3].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
+
+        plt.tight_layout()
+        plt.show()
+
+    @staticmethod
+    def plot_per_trade_mtm(df: pd.DataFrame, top_n: int = 10) -> None:
+        """
+        Per-trade MtM evolution chart.
+
+        For each of the top_n MM fills (ranked by fill size), plots how that
+        fill's individual MtM contribution evolves over the remainder of the
+        session as fair_mid changes. The aggregate session MtM is shown in the
+        background for reference.
+
+        Each line starts at the fill's inception time with value
+        ≈ inception_spread_i − fee_i, then drifts as mid moves.
+
+        Parameters
+        ----------
+        df     : Quoter.trade_history DataFrame
+        top_n  : number of fills to highlight (default 10)
+        """
+        if df.empty:
+            print("No trades to plot.")
+            return
+
+        aug = PnLTracker.augment(df)
+        ev  = PnLTracker.per_trade_mtm_evolution(df)
+
+        mm = df[~df['is_hedge']]
+        if mm.empty:
+            print("No MM fills to plot.")
+            return
+
+        top_labels = mm.nlargest(min(top_n, len(mm)), 'size').index.tolist()
+        # Map DataFrame label → integer position
+        pos_map   = {lbl: pos for pos, lbl in enumerate(df.index)}
+        top_pos   = [pos_map[lbl] for lbl in top_labels]
+
+        palette = plt.cm.tab10.colors if top_n <= 10 else plt.cm.tab20.colors
+        t_vals  = df['t'].values
+
+        fig, ax = plt.subplots(figsize=(14, 6))
+        fig.patch.set_facecolor('#111111')
+        ax.set_facecolor('#111111')
+        ax.tick_params(colors='white')
+        ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.5, color='#444444')
+        for spine in ['top', 'right']:
+            ax.spines[spine].set_visible(False)
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_color('#444444')
+
+        # Aggregate MtM as grey background reference
+        ax.plot(aug['t'], aug['mtm_pnl'], color='#555555', linewidth=1.2,
+                linestyle='--', label='Aggregate MtM', zorder=1)
+        ax.axhline(0, color='#444', linewidth=0.6)
+
+        # Per-trade lines
+        for k, pos in enumerate(top_pos):
+            col   = ev.iloc[:, pos]
+            valid = ~col.isna()
+            lbl   = top_labels[k]
+            size  = df.loc[lbl, 'size']
+            dirn  = df.loc[lbl, 'direction']
+            color = palette[k % len(palette)]
+            ax.plot(t_vals[valid], col[valid], color=color, linewidth=0.9,
+                    label=f'Fill {pos} ({dirn}, {size:,.0f} EUR)', zorder=2)
+            # Mark inception point
+            ax.scatter([t_vals[pos]], [col.iloc[pos]],
+                       color=color, s=35, zorder=3)
+
+        ax.set_title(
+            f'Per-trade MtM Evolution — Top {len(top_pos)} MM fills by size (USD)',
+            color='white', fontsize=13,
+        )
+        ax.set_ylabel('MtM contribution (USD)', color='white')
+        ax.set_xlabel('Time (s)', color='white')
+        ax.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white',
+                  fontsize=8, loc='upper left')
 
         plt.tight_layout()
         plt.show()
