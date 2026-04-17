@@ -38,6 +38,9 @@ Total MtM P&L  =  realized_pnl  +  unrealized_pnl
 | `inventory_revaluation_pnl(df, current_mid)` | `df, float → float` | Residual: `MtM − inception + fees` |
 | `final_inventory_value(df, current_mid)` | `df, float → float` | `final_inventory × current_mid` (USD) |
 | `report(df, current_mid)` | `df, float → dict` | Full breakdown (all above + fee split + trade counts) |
+| `per_trade_mtm_evolution(df)` | `df → DataFrame` | `n×n` matrix of per-fill MtM contributions over time |
+| `plot(df, current_mid, ...)` | `df, float → None` | 4-panel session chart (MtM, inventory, decomposition, fees) |
+| `plot_per_trade_mtm(df, top_n)` | `df, int → None` | Per-fill MtM evolution for top `top_n` fills by size |
 
 ---
 
@@ -70,6 +73,43 @@ rep = PnLTracker.report(df, current_mid)
 #   'n_hedges':                  ...,
 #   'n_total_trades':            ...,
 # }
+```
+
+---
+
+## Per-trade MtM Evolution
+
+The methods above give **session-level** aggregates. The two methods below decompose the aggregate into individual fill contributions tracked over time.
+
+### Formula
+
+For fill `i` at time `t_i` with cash flow `cf_i` and inventory delta `Δinv_i`:
+
+```
+MtM_i(t_j) = cf_i + Δinv_i × fair_mid_j     (for j ≥ i)
+```
+
+- At inception (`j = i`): value ≈ `inception_spread_i − fee_i` — the spread locked in, net of cost.
+- After inception (`j > i`): value tracks how the residual inventory position is marked as mid moves.
+- Identity: `sum over i≤j of MtM_i(t_j) = augment(df)['mtm_pnl'] at row j`
+
+| Method | Signature | Returns |
+|---|---|---|
+| `per_trade_mtm_evolution(df)` | `df → DataFrame` | `n×n` matrix — `value[j,i]` = MtM contribution of fill `i` at fill time `j` |
+| `plot_per_trade_mtm(df, top_n)` | `df, int → None` | Line chart of top `top_n` fills by size, with aggregate MtM background |
+
+### Usage
+
+```python
+# Matrix of per-fill contributions
+ev = PnLTracker.per_trade_mtm_evolution(df)
+
+# Verify identity: row sums == aggregate mtm_pnl
+aug = PnLTracker.augment(df)
+assert (abs(ev.sum(axis=1).values - aug['mtm_pnl'].values) < 1e-6).all()
+
+# Chart: top 10 fills
+PnLTracker.plot_per_trade_mtm(df, top_n=10)
 ```
 
 ---
