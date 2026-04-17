@@ -10,6 +10,7 @@ class Market(object):
         self.stock = stock
         self.vol_noise: np.array | None = None
         self.noised_mid_price: np.array | None = None
+        self.depth: np.array | None = None   # EUR size available at best quote, each step
         self._time_grid: np.array | None = None
         self.ask_price_constant: np.array | None = None
         self.bid_price_constant: np.array | None = None
@@ -49,6 +50,24 @@ class Market(object):
         self._time_grid = self.stock._time_grid
         self.noised_mid_price = self.stock.simulation + self.vol_noise
     
+
+    def generate_depth(self, mean_eur: float = 500_000.0, vol_factor: float = 0.5) -> np.array:
+        """
+        Generate a time series of available EUR size at the best quote each step.
+
+        Depth varies as a lognormal process around mean_eur:
+            depth[t] = mean_eur * exp(vol_factor * Z - 0.5 * vol_factor²)
+
+        Parameters
+        ----------
+        mean_eur   : mean available depth in EUR (default 500k)
+        vol_factor : log-standard-deviation controlling depth variability (default 0.5)
+                     0.5 means depth ranges roughly from mean/2 to 2×mean 68% of the time.
+        """
+        n = self.stock.n_steps + 1
+        Z = np.random.standard_normal(n)
+        self.depth = mean_eur * np.exp(vol_factor * Z - 0.5 * vol_factor ** 2)
+        return self.depth
 
     def build_static_spread(self, tick_factor = 100):
 

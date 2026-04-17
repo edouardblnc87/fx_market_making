@@ -11,62 +11,73 @@ from ..market_simulator.market import Market
 from ..stock_simulation.config import TRADING_SECONDS_PER_YEAR
 
 # FX session boundaries in seconds from midnight UTC.
-# t=0 is intentionally excluded — cold start is handled by _first_quote flag.
 # Tokyo: 00:00-08:00  |  London: 08:00-16:00  |  New York: 16:00-00:00
 FX_SESSION_RESETS_UTC = [8 * 3600, 16 * 3600]
+
+# Session-adaptive k values: order-arrival intensity decay varies significantly across FX sessions. 
+# London/NY overlap is the deepest and most liquid; Tokyo is comparatively thin. A single k calibrated on one session misprices fill probability on others.
+# These multipliers are applied to cfg.k at quote time via _session_k().
+_SESSION_K_MULTIPLIERS = {
+    "tokyo":   0.75,   # thinner book, orders less sensitive to distance → lower k
+    "london":  1.25,   # deepest session, strong price sensitivity → higher k
+    "newyork": 1.00,   # reference calibration
+}
 
 
 @dataclass
 class QuoterConfig:
-    # ── Avellaneda-Stoikov core
+    # Avellaneda-Stoikov core
     gamma: float = 0.1
-    k:     float = 1.5
-    T:     float = 8 * 3600
+    k: float = 1.5
+    # Infinite-horizon discount rate (replaces T-t from the finite-horizon A-S formulation).
+    omega: float = 1.0 / (8 * 3600)   # default: risk horizon ≈ one FX session
 
-    # ── Guéant core
+    # Guéant core
     alpha_spread: float = 0.5
     use_asymmetric_delta: bool = True
-    terminal_penalty_strength: float = 5.0
 
-    # ── Quoting structure
-    n_levels: int   = 10
-    beta:     float = 0.3
-    Q_base:   float = 100_000.0
+    # Quoting structure
+    n_levels: int = 10
+    beta: float = 0.3
+    Q_base: float = 100_000.0
 
-    # ── Market conventions
+    # Market conventions
     tick_size: float = 0.0001
 
-    # ── Requote triggers
-    # Fraction of current spread: skip requote if price moved less than this
+    # Requote triggers
     requote_threshold_spread_fraction: float = 0.25
-    # Staleness: force requote if order is older than this many steps AND inventory is stressed
     stale_steps: int = 300
-    # Inventory stress threshold: fraction of capital_K above which staleness rule fires
     stale_inventory_fraction: float = 0.5
+    # Inventory-change trigger: force a requote when |inventory| has moved by more than this fraction of capital_K since the last reprice, even if prices are flat.
+    inventory_requote_fraction: float = 0.05
 
-    # ── Volume weights
+    # Minimum number of fills required before the imbalance signal is trusted.
+    imbalance_min_samples: int = 10  # Below this count the window is too small and a single trade flips the signal.
+
+    # Volume weights
     weight_B: float = 0.75
     weight_C: float = 0.25
 
-    # ── Latency parameters (seconds)
-    latency_B_s:   float = 0.200
-    latency_C_s:   float = 0.170
+    # Latency parameters (seconds)
+    latency_B_s: float = 0.200
+    latency_C_s: float = 0.170
     latency_hft_s: float = 0.050
 
-    # ── Volatility estimation
+    # Volatility estimation
     vol_window: int = 6000
+    # Minimum number of steps before switching from the parametric fallback to realized vol.
+    vol_min_steps: int = 200
 
-    # ── Order flow imbalance signal (Cartea & Jaimungal)
-    # Tilt the reservation price toward the direction of dominant client flow.
-    # imbalance_window: number of recent fills used to compute the signal
-    # alpha_imbalance : scaling coefficient — how aggressively to tilt
-    imbalance_window: int   = 50
-    alpha_imbalance:  float = 0.0002
+    # Order flow imbalance signal (Cartea & Jaimungal)
+    imbalance_window: int = 50
+    alpha_imbalance: float = 0.0002
 
-    # ── Risk management
+    # Risk management
     delta_limit: float = 0.90
+    hedge_partial_limit: float = 0.80
+    emergency_penalty_multiplier: float = 5.0
 
-    # ── Fee structure
+    # Fee structure
     fee_A_maker: float = 0.0001
     fee_A_taker: float = 0.0004
     fee_B_maker: float = 0.00009
@@ -83,12 +94,20 @@ class Quoter:
       - Emits quote updates each step (but only acts on the book selectively)
       - Listens for FillEvents from the OrderBook via on_fill()
       - Triggers session resets at FX session boundaries
+
+    Key modelling choices vs the original:
+      - Infinite-horizon A-S formulation (omega replaces T-t): stationary inventory
+        penalty appropriate for a 24/5 FX market with no terminal liquidation.
+      - Session-adaptive k: order-arrival intensity scaled per FX session liquidity.
+      - Inventory-change requote trigger: prevents silent accumulation at stale skew.
+      - Hedge fill price: taker spread on B/C included in hedge P&L accounting.
+      - Vol fallback: parametric vol used as-is below vol_min_steps (no 0.2× floor).
     """
 
-    def __init__(self, market_B:  Market, market_C:  Market, config:    QuoterConfig | None = None, capital_K: float = 1_000_000.0):
-        self.market_B  = market_B
-        self.market_C  = market_C
-        self.cfg       = config if config is not None else QuoterConfig()
+    def __init__(self, market_B: Market, market_C: Market, config: QuoterConfig | None = None, capital_K: float = 1_000_000.0):
+        self.market_B = market_B
+        self.market_C = market_C
+        self.cfg = config if config is not None else QuoterConfig()
         self.capital_K = capital_K
 
         self.inventory: float = 0.0
@@ -106,19 +125,19 @@ class Quoter:
         self._prev_best_bid: float | None = None
         self._prev_best_ask: float | None = None
 
+        # Inventory level at the last reprice — used for the inventory-change trigger
+        self._prev_inventory: float = 0.0
+
         # Flag: True until compute_quotes() has been called at least once.
-        # Guarantees the very first call ALWAYS emits the full 10×2 ladder,
-        # regardless of threshold / session-reset logic.
         self._first_quote: bool = True
 
+        # True when a hedge was attempted but available depth on B+C wasn't enough to bring inventory below hedge_partial_limit. 
+        self._hedge_emergency: bool = False  # Compute_quotes will apply an emergency penalty. Multiplier to force extreme quote skew on A until inventory recovers.
+
         # Last session reset timestamp (in simulation seconds).
-        # Initialised to 0.0 (not -1) so boundaries > 0 are not accidentally
-        # triggered on the first call.
         self._last_session_reset_t: float = 0.0
 
         # Order flow imbalance — rolling list of MM fill directions (capped at imbalance_window).
-        # "sell" fill = client hit our ask -> bullish signal -> tilt reservation price up.
-        # "buy"  fill = client hit our bid -> bearish signal -> tilt reservation price down.
         self._flow_history: List[str] = []
 
         dt = market_B.stock.time_step
@@ -130,7 +149,7 @@ class Quoter:
         gap_C = self.cfg.latency_C_s - self.cfg.latency_hft_s
         self._effective_gap_s: float = (self.cfg.weight_B * gap_B + self.cfg.weight_C * gap_C)
 
-    
+
     #  LISTENER INTERFACE  (called by the OrderBook)
 
     def on_fill(self, event: FillEvent) -> None:
@@ -140,7 +159,6 @@ class Quoter:
         Only queues a forced cancel/requote for full fills — a partially filled order
         is still resting and valid, so we leave it alone until threshold/staleness fires.
         """
-        # Inventory update always applies regardless of partial/full
         delta_q = event.size if event.direction == "buy" else -event.size
         self.inventory += delta_q
 
@@ -149,6 +167,7 @@ class Quoter:
         mid_C = (float(self.market_C.bid_price[event.step]) + float(self.market_C.ask_price[event.step])) / 2.0
         fair_mid = self.cfg.weight_B * mid_B + self.cfg.weight_C * mid_C
         fee_cost = event.size * event.price * self.cfg.fee_A_maker
+
         # MM perspective: sell fill = cash in, buy fill = cash out — fees proportional to notional
         cash_flow = (event.size * event.price * (1.0 - self.cfg.fee_A_maker)
                      if event.direction == "sell"
@@ -171,20 +190,16 @@ class Quoter:
             "venue": "A",
         })
 
-        # Track flow direction for the imbalance signal (rolling window)
         self._flow_history.append(event.direction)
         if len(self._flow_history) > self.cfg.imbalance_window:
             self._flow_history.pop(0)
 
-        # Full fill → slot is empty, must re-quote that level
         if event.is_full_fill:
             self._pending_fills.append(event)
         else:
-            # Partial fill → order still resting but undersized, queue a top-up
             self._pending_topups.append(event)
 
 
-    
     #  MAIN QUOTING FUNCTION
 
     def compute_quotes(self, step: int, t: float, resting_orders: dict) -> Tuple[List[Order], List[str]]:
@@ -201,61 +216,65 @@ class Quoter:
         Returns
         -------
         new_quotes : Quote objects to post to the book. Empty = do nothing.
-        cancel_ids : order IDs to cancel BEFORE posting new_quotes.
+        cancel_ids : order IDs to cancel before posting new_quotes.
 
         Decision logic (in priority order)
         -----------------------------------
-        1. First call ever           -> full 20-order ladder, no cancels.
-        2. FX session boundary       -> cancel all, full 20-order ladder.
-        3. Full fill received        -> replace only the filled (direction, level) slot.
-        4. Best-price drift > threshold -> cancel ALL resting orders, full reprice.
-        5. Stale + stressed inventory -> cancel stale orders, reprice those slots.
-        6. Nothing triggered         -> return [], [] (no action).
+        1. First call ever -> full 20-order ladder, no cancels.
+        2. FX session boundary -> cancel all, full 20-order ladder.
+        3. Best-price drift > threshold -> cancel ALL resting orders, full reprice.
+        4. Full fill received -> replace only the filled (direction, level) slot.
+        5. Inventory moved > inventory_requote_fraction since last reprice -> full reprice.
+        6. Stale + stressed inventory -> cancel stale orders, reprice those slots.
+        7. Nothing triggered -> return [], [] (no action).
         """
 
-        # ── Step 1: drain both fill queues (accumulated since last call via on_fill)
+        # Step 1: drain both fill queues (accumulated since last call via on_fill)
         filled_slots = {(f.direction, f.level) for f in self._pending_fills}
         self._pending_fills.clear()
 
-        # Deduplicate partial fills by order_id — only one top-up needed per order
         topup_ids = {e.order_id for e in self._pending_topups}
         self._pending_topups.clear()
 
-        # ── Step 2: compute current theoretical best bid and ask
+        # Step 2: compute current theoretical best bid and ask
         bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
         bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
-        fair_mid     = (max(bid_B, bid_C) + min(ask_B, ask_C)) / 2.0
+        fair_mid = (max(bid_B, bid_C) + min(ask_B, ask_C)) / 2.0
 
-        sigma            = self._estimate_vol(step)
-        time_remaining_y = max(self.cfg.T - t, 1.0) / TRADING_SECONDS_PER_YEAR
-        time_fraction    = t / self.cfg.T
-        penalty_factor   = 1.0 + self.cfg.terminal_penalty_strength * (time_fraction ** 3)
+        sigma = self._estimate_vol(step)
+        # Infinite-horizon inventory penalty
+        inv_horizon_y = 1.0 / (self.cfg.omega * TRADING_SECONDS_PER_YEAR)
+        if self._hedge_emergency:
+            inv_horizon_y *= self.cfg.emergency_penalty_multiplier
 
-        # Avellaneda-Stoikov reservation price
         reservation_price = (
             fair_mid
-            - self.inventory * self.cfg.gamma * sigma**2 * time_remaining_y * penalty_factor
+            - self.inventory * self.cfg.gamma * sigma**2 * inv_horizon_y
         )
+
         # Order-flow imbalance tilt (Cartea & Jaimungal)
-        imbalance          = self._compute_imbalance()
+        imbalance = self._compute_imbalance()
         reservation_price += self.cfg.alpha_imbalance * imbalance * fair_mid
 
-        # A-S optimal spread
-        spread_AS_bps = (
-            self.cfg.gamma * (sigma * 100.0) ** 2 * time_remaining_y
-            + (2.0 / self.cfg.gamma) * np.log(1.0 + self.cfg.gamma / self.cfg.k)
-        )
-        spread_AS        = spread_AS_bps / 10_000.0 * fair_mid
-        sigma_per_s      = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR)
-        spread_latency   = 2.0 * sigma_per_s * np.sqrt(self._effective_gap_s)
-        inventory_ratio  = self.inventory / self.capital_K
-        spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
-        total_spread     = spread_AS + spread_latency + spread_inventory
-        half_spread      = max(total_spread / 2.0, self.cfg.tick_size)
+        # Session-adaptive k: adjust order-arrival intensity for current FX session liquidity
+        k_eff = self._session_k(t)
 
-        # Asymmetric delta skew (Guéant)
+        # A-S optimal spread under infinite horizon
+        spread_AS_bps = (
+            self.cfg.gamma * (sigma * 100.0) ** 2 * inv_horizon_y
+            + (2.0 / self.cfg.gamma) * np.log(1.0 + self.cfg.gamma / k_eff)
+        )
+        spread_AS = spread_AS_bps / 10_000.0 * fair_mid
+        sigma_per_s = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR)
+        spread_latency = 2.0 * sigma_per_s * np.sqrt(self._effective_gap_s)
+        inventory_ratio = self.inventory / self.capital_K
+        spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
+        total_spread = spread_AS + spread_latency + spread_inventory
+        half_spread = max(total_spread / 2.0, self.cfg.tick_size)
+
+        # Asymmetric delta skew (Guéant), using session-adaptive k
         if self.cfg.use_asymmetric_delta:
-            skew_delta = self.inventory * np.sqrt(self.cfg.gamma * sigma**2 / (2.0 * self.cfg.k))
+            skew_delta = self.inventory * np.sqrt(self.cfg.gamma * sigma**2 / (2.0 * k_eff))
             skew_delta = np.clip(skew_delta, -(half_spread - 0.5 * self.cfg.tick_size),
                                               (half_spread - 0.5 * self.cfg.tick_size))
         else:
@@ -266,52 +285,59 @@ class Quoter:
         if best_bid >= best_ask:
             best_ask = best_bid + self.cfg.tick_size
 
-        # Threshold in price units — how much best_bid/ask must move to force a reprice
         threshold = self.cfg.requote_threshold_spread_fraction * total_spread
 
-        # ── Priority 1: very first call — full ladder, no prior state to compare against
+        # Priority 1: very first call. Full ladder, no prior state to compare against
         if self._first_quote:
-            self._first_quote   = False
+            self._first_quote = False
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
+            self._prev_inventory = self.inventory
             return self._build_ladder(best_bid, best_ask, inventory_ratio), []
 
-        # ── Priority 2: FX session boundary — cancel everything, start fresh
+        # Priority 2: FX session boundary — cancel everything, start fresh
         if self._is_session_reset(t):
             self._last_session_reset_t = t
-            self._prev_best_bid        = best_bid
-            self._prev_best_ask        = best_ask
+            self._prev_best_bid = best_bid
+            self._prev_best_ask = best_ask
+            self._prev_inventory = self.inventory
             self._flow_history.clear()
             cancel_ids = list(resting_orders.keys())
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
-        # ── Priority 3: best price has drifted beyond threshold
-        # Compare current best_bid/ask against what was quoted last time.
-        # If the mid has moved enough, cancel ALL resting orders and reprice everything.
+        # Priority 3: best price has drifted beyond threshold — cancel all and reprice
         price_drifted = (
             abs(best_bid - self._prev_best_bid) > threshold
             or abs(best_ask - self._prev_best_ask) > threshold
         )
         if price_drifted:
-            cancel_ids          = list(resting_orders.keys())
+            cancel_ids = list(resting_orders.keys())
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
+            self._prev_inventory = self.inventory
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
-        # ── Priority 4: full fills + partial top-ups — handle both in one pass
-        # Full fills:   slot is gone, re-emit a fresh order at the new best price.
-        # Partial fills: slot still resting but undersized — add a complementary order
-        #                at the SAME price to restore the original size, no cancel needed.
+        # Priority 4: full fills + partial top-ups. Handle both in one pass
         topup_orders = self._build_topups(resting_orders, topup_ids)
         if filled_slots or topup_orders:
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
+            self._prev_inventory = self.inventory
             return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, filled_slots) + topup_orders, []
 
-        # ── Priority 5: stale orders with stressed inventory — cancel and reprice those slots
+        # Priority 5: inventory has drifted enough since the last reprice to invalidate the current skew, even if market prices have not moved (silent accumulation).
+        inventory_moved = abs(self.inventory - self._prev_inventory) / self.capital_K # This ensures resting orders always reflect the current reservation price skew
+        if inventory_moved > self.cfg.inventory_requote_fraction:
+            cancel_ids = list(resting_orders.keys())
+            self._prev_best_bid = best_bid
+            self._prev_best_ask = best_ask
+            self._prev_inventory = self.inventory
+            return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
+
+        # Priority 6: stale orders with stressed inventory. Cancel and reprice those slots
         inventory_stressed = abs(inventory_ratio) > self.cfg.stale_inventory_fraction
         if inventory_stressed:
-            cancel_ids:      List[str]            = []
+            cancel_ids: List[str] = []
             cancelled_slots: Set[Tuple[str, int]] = set()
             for oid, info in resting_orders.items():
                 if info["age"] > self.cfg.stale_steps:
@@ -320,38 +346,65 @@ class Quoter:
             if cancel_ids:
                 self._prev_best_bid = best_bid
                 self._prev_best_ask = best_ask
+                self._prev_inventory = self.inventory
                 return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, cancelled_slots), cancel_ids
 
-        # ── Nothing triggered — resting orders are still valid, do nothing
+        # Nothing triggered. Resting orders are still valid, do nothing
         return [], []
 
-    
-    
+
     #  RISK MANAGEMENT
 
     def needs_hedge(self) -> bool:
         return abs(self.inventory) / self.capital_K > self.cfg.delta_limit
 
-    def hedge_order(self, market_B_depth: float, market_C_depth: float, fair_mid: float) -> Tuple[float, float, float]:
-        # Target flat (inventory=0) = 50% EUR / 50% USD
-        total_size = -self.inventory
-        impact_factor = fair_mid * 0.0001
+    def hedge_order(self, depth_B: float, depth_C: float, fair_mid: float,
+                    sigma: float = 0.0) -> Tuple[float, float, float]:
+        """
+        Compute the optimal hedge split across B and C given actual available depth.
 
-        score_B = (1.0 / (self.cfg.fee_B_taker + impact_factor / market_B_depth)
-                   if market_B_depth > 0 else 0.0)
-        score_C = (1.0 / (self.cfg.fee_C_taker + impact_factor / market_C_depth)
-                   if market_C_depth > 0 else 0.0)
+        Score formula (higher = preferred venue):
+            score = 1 / (taker_fee + latency_cost + impact_factor / depth)
+
+        where:
+            latency_cost = vol_per_s × latency_s   (expected adverse move during execution lag)
+            impact_factor = fair_mid × 0.0001       (Kyle-lambda proxy)
+
+        The total hedge is capped at depth_B + depth_C: if that is less than |inventory|,
+        we hedge as much as available and the caller handles the residual.
+        Overflow from the preferred venue is rerouted to the other.
+        """
+        total_target = -self.inventory
+        total_available = depth_B + depth_C
+        total_size = float(np.sign(total_target)) * min(abs(total_target), total_available)
+
+        if total_size == 0.0:
+            return 0.0, 0.0, 0.0
+
+        impact_factor = fair_mid * 0.0001
+        vol_per_s = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR) if sigma > 0.0 else 0.0
+
+        score_B = (1.0 / (self.cfg.fee_B_taker + vol_per_s * self.cfg.latency_B_s
+                          + impact_factor / max(depth_B, 1e-8))
+                   if depth_B > 0.0 else 0.0)
+        score_C = (1.0 / (self.cfg.fee_C_taker + vol_per_s * self.cfg.latency_C_s
+                          + impact_factor / max(depth_C, 1e-8))
+                   if depth_C > 0.0 else 0.0)
 
         total_score = score_B + score_C
-        ratio_B     = self.cfg.weight_B if total_score == 0.0 else score_B / total_score
+        ratio_B = self.cfg.weight_B if total_score == 0.0 else score_B / total_score
 
-        size_B = round(total_size * ratio_B,         2)
-        size_C = round(total_size * (1.0 - ratio_B), 2)
+        ideal_B = total_size * ratio_B
+        size_B = float(np.sign(ideal_B)) * min(abs(ideal_B), depth_B)
+        overflow = ideal_B - size_B
+        ideal_C = total_size * (1.0 - ratio_B) + overflow
+        size_C = float(np.sign(ideal_C)) * min(abs(ideal_C), depth_C) if ideal_C != 0.0 else 0.0
 
-        fee_cost = (
-            abs(size_B) * self.cfg.fee_B_taker * fair_mid
-            + abs(size_C) * self.cfg.fee_C_taker * fair_mid
-        )
+        size_B = round(size_B, 2)
+        size_C = round(size_C, 2)
+
+        fee_cost = (abs(size_B) * self.cfg.fee_B_taker * fair_mid
+                    + abs(size_C) * self.cfg.fee_C_taker * fair_mid)
         return size_B, size_C, fee_cost
 
     def fill_cost(self, size: float, fair_mid: float) -> float:
@@ -359,33 +412,64 @@ class Quoter:
 
     def execute_hedge(self, step: int, t: float, fair_mid: float) -> bool:
         """
-        If inventory is at critical level, execute optimal hedge across B and C.
-        Records each leg as a trade in _fill_history with is_hedge=True and venue="B"/"C".
-        Returns True if a hedge was executed.
+        Execute the optimal hedge across B and C when inventory breaches delta_limit.
+        Records each leg in _fill_history with is_hedge=True and venue="B"/"C".
+        Returns True if any hedge leg was executed.
 
-        B and C are assumed to be deep reference markets — depth defaulted to 1_000_000.
+        Depth is read from market_B.depth / market_C.depth at the lagged step (same
+        latency as prices). If depth arrays are not generated, falls back to capital_K
+        scaled by volume weight so the hedge always executes.
+
+        Fill price: taker order on B or C crosses the spread — buying fills at the venue
+        ask, selling fills at the venue bid (both at the lagged step). Taker fee is then
+        applied on top of that fill price.
+
+        Three outcomes based on post-hedge inventory ratio:
+          ≤ hedge_partial_limit   : full or partial hedge succeeded — clear emergency flag.
+          > hedge_partial_limit   : available depth was insufficient — set _hedge_emergency
+                                    so compute_quotes applies an extreme penalty to force
+                                    asymmetric quotes on A toward inventory reduction.
         """
         if not self.needs_hedge():
+            self._hedge_emergency = False
             return False
 
-        size_B, size_C, _ = self.hedge_order(
-            market_B_depth=1_000_000.0,
-            market_C_depth=1_000_000.0,
-            fair_mid=fair_mid,
-        )
+        stale_B = max(0, step - self._lag_B)
+        stale_C = max(0, step - self._lag_C)
+        depth_B = (float(self.market_B.depth[stale_B])
+                   if self.market_B.depth is not None
+                   else self.capital_K * self.cfg.weight_B)
+        depth_C = (float(self.market_C.depth[stale_C])
+                   if self.market_C.depth is not None
+                   else self.capital_K * self.cfg.weight_C)
 
-        for size, venue, fee_rate in [
-            (size_B, "B", self.cfg.fee_B_taker),
-            (size_C, "C", self.cfg.fee_C_taker),
+        # Read actual bid/ask at the lagged step for each venue — these are the prices
+        bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
+        bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
+
+        sigma = self._estimate_vol(step)
+        size_B, size_C, _ = self.hedge_order(depth_B, depth_C, fair_mid, sigma)
+
+        inventory_after = self.inventory + size_B + size_C
+        if abs(inventory_after) / self.capital_K > self.cfg.hedge_partial_limit:
+            self._hedge_emergency = True
+        else:
+            self._hedge_emergency = False
+
+        for size, venue, fee_rate, bid_v, ask_v in [
+            (size_B, "B", self.cfg.fee_B_taker, bid_B, ask_B),
+            (size_C, "C", self.cfg.fee_C_taker, bid_C, ask_C),
         ]:
             if size == 0.0:
                 continue
             abs_size = abs(size)
             direction = "buy" if size > 0 else "sell"
-            fee_cost = abs_size * fair_mid * fee_rate
-            cash_flow = (-abs_size * fair_mid * (1.0 + fee_rate)
+            # Taker crosses the spread: buying hits the ask, selling hits the bid
+            fill_price = ask_v if size > 0 else bid_v
+            fee_cost = abs_size * fill_price * fee_rate
+            cash_flow = (-abs_size * fill_price * (1.0 + fee_rate)
                          if size > 0
-                         else abs_size * fair_mid * (1.0 - fee_rate))
+                         else abs_size * fill_price * (1.0 - fee_rate))
             self.inventory += size
             self._fill_history.append({
                 "order_id": None,
@@ -393,7 +477,7 @@ class Quoter:
                 "step": step,
                 "t": t,
                 "direction": direction,
-                "price": fair_mid,
+                "price": fill_price,
                 "size": abs_size,
                 "is_full_fill": True,
                 "fair_mid": fair_mid,
@@ -404,8 +488,7 @@ class Quoter:
                 "venue": venue,
             })
 
-        return True
-
+        return size_B != 0.0 or size_C != 0.0
 
 
     #  DIAGNOSTICS
@@ -413,40 +496,39 @@ class Quoter:
     def snapshot(self, step: int, t: float) -> dict:
         bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
         bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
-        best_bid_ref  = max(bid_B, bid_C)
-        best_ask_ref  = min(ask_B, ask_C)
-        fair_mid      = (best_bid_ref + best_ask_ref) / 2.0
+        best_bid_ref = max(bid_B, bid_C)
+        best_ask_ref = min(ask_B, ask_C)
+        fair_mid = (best_bid_ref + best_ask_ref) / 2.0
 
-        sigma            = self._estimate_vol(step)
-        time_remaining_y = max(self.cfg.T - t, 1.0) / TRADING_SECONDS_PER_YEAR
-        time_fraction    = t / self.cfg.T
-        penalty_factor   = 1.0 + self.cfg.terminal_penalty_strength * (time_fraction ** 3)
+        sigma = self._estimate_vol(step)
+        inv_horizon_y = 1.0 / (self.cfg.omega * TRADING_SECONDS_PER_YEAR)
+        k_eff = self._session_k(t)
 
         reservation_price = (
             fair_mid
-            - self.inventory * self.cfg.gamma * sigma**2 * time_remaining_y * penalty_factor
+            - self.inventory * self.cfg.gamma * sigma**2 * inv_horizon_y
         )
 
         imbalance = self._compute_imbalance()
         reservation_price += self.cfg.alpha_imbalance * imbalance * fair_mid
 
         spread_AS_bps = (
-            self.cfg.gamma * (sigma * 100.0) ** 2 * time_remaining_y
-            + (2.0 / self.cfg.gamma) * np.log(1.0 + self.cfg.gamma / self.cfg.k)
+            self.cfg.gamma * (sigma * 100.0) ** 2 * inv_horizon_y
+            + (2.0 / self.cfg.gamma) * np.log(1.0 + self.cfg.gamma / k_eff)
         )
-        spread_AS        = spread_AS_bps / 10_000.0 * fair_mid
-        sigma_per_s      = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR)
-        spread_latency   = 2.0 * sigma_per_s * np.sqrt(self._effective_gap_s)
-        inventory_ratio  = self.inventory / self.capital_K
+        spread_AS = spread_AS_bps / 10_000.0 * fair_mid
+        sigma_per_s = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR)
+        spread_latency = 2.0 * sigma_per_s * np.sqrt(self._effective_gap_s)
+        inventory_ratio = self.inventory / self.capital_K
         spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
-        total_spread     = spread_AS + spread_latency + spread_inventory
-        half_spread      = max(total_spread / 2.0, self.cfg.tick_size)
+        total_spread = spread_AS + spread_latency + spread_inventory
+        half_spread = max(total_spread / 2.0, self.cfg.tick_size)
 
         if self.cfg.use_asymmetric_delta:
             skew_delta = self.inventory * np.sqrt(
-                self.cfg.gamma * sigma**2 / (2.0 * self.cfg.k)
+                self.cfg.gamma * sigma**2 / (2.0 * k_eff)
             )
-            max_skew   = half_spread - 0.5 * self.cfg.tick_size
+            max_skew = half_spread - 0.5 * self.cfg.tick_size
             skew_delta = np.clip(skew_delta, -max_skew, max_skew)
         else:
             skew_delta = 0.0
@@ -457,32 +539,32 @@ class Quoter:
         best_ask = self._snap_to_tick(reservation_price + ask_half)
 
         return {
-            "step":               step,
-            "t_seconds":          t,
-            "bid_B":              bid_B,  "ask_B": ask_B,
-            "bid_C":              bid_C,  "ask_C": ask_C,
-            "fair_mid":           fair_mid,
-            "reservation_price":  reservation_price,
-            "penalty_factor":     penalty_factor,
-            "spread_AS":          spread_AS,
-            "spread_latency":     spread_latency,
-            "spread_inventory":   spread_inventory,
-            "total_spread":       total_spread,
-            "half_spread":        half_spread,
-            "skew_delta":         skew_delta,
-            "ask_half":           ask_half,
-            "bid_half":           bid_half,
-            "best_bid":           best_bid,
-            "best_ask":           best_ask,
-            "spread_bps":         (best_ask - best_bid) / fair_mid * 10_000.0,
-            "inventory_EUR":      self.inventory,
-            "inventory_ratio":    inventory_ratio,
-            "time_remaining_s":   max(self.cfg.T - t, 1.0),
-            "needs_hedge":        self.needs_hedge(),
-            "effective_gap_ms":   self._effective_gap_s * 1000.0,
-            "sigma_used":         sigma,
-            "n_fills":            len(self._fill_history),
-            "imbalance":          imbalance,
+            "step": step,
+            "t_seconds": t,
+            "bid_B": bid_B, "ask_B": ask_B,
+            "bid_C": bid_C, "ask_C": ask_C,
+            "fair_mid": fair_mid,
+            "reservation_price": reservation_price,
+            "inv_horizon_y": inv_horizon_y,
+            "k_eff": k_eff,
+            "spread_AS": spread_AS,
+            "spread_latency": spread_latency,
+            "spread_inventory": spread_inventory,
+            "total_spread": total_spread,
+            "half_spread": half_spread,
+            "skew_delta": skew_delta,
+            "ask_half": ask_half,
+            "bid_half": bid_half,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "spread_bps": (best_ask - best_bid) / fair_mid * 10_000.0,
+            "inventory_EUR": self.inventory,
+            "inventory_ratio": inventory_ratio,
+            "needs_hedge": self.needs_hedge(),
+            "effective_gap_ms": self._effective_gap_s * 1000.0,
+            "sigma_used": sigma,
+            "n_fills": len(self._fill_history),
+            "imbalance": imbalance,
         }
 
     @property
@@ -499,16 +581,16 @@ class Quoter:
     #  PRIVATE HELPERS
 
     def _build_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float) -> List[Order]:
-        """Build the full 10-level bid/ask ladder. Used only on session resets."""
+        """Build the full 10-level bid/ask ladder. Used on first quote and full reprices."""
         inventory_skew = np.clip(inventory_ratio, -1.0, 1.0)
         orders: List[Order] = []
         for i in range(1, self.cfg.n_levels + 1):
             base_size = self.cfg.Q_base * np.exp(-self.cfg.beta * i)
-            bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew))
-            ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew))
+            bid_size = round(base_size * (1.0 - 0.5 * inventory_skew))
+            ask_size = round(base_size * (1.0 + 0.5 * inventory_skew))
             bid_price = self._snap_to_tick(best_bid - (i - 1) * self.cfg.tick_size)
             ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
-            orders.append(Order(generate_order_id(), "buy",  bid_price, bid_size, "limit_order", "market_maker", i))
+            orders.append(Order(generate_order_id(), "buy", bid_price, bid_size, "limit_order", "market_maker", i))
             orders.append(Order(generate_order_id(), "sell", ask_price, ask_size, "limit_order", "market_maker", i))
         return orders
 
@@ -522,11 +604,11 @@ class Quoter:
         for i in range(1, self.cfg.n_levels + 1):
             base_size = self.cfg.Q_base * np.exp(-self.cfg.beta * i)
             if ("buy", i) in slots:
-                bid_size  = round(base_size * (1.0 - 0.5 * inventory_skew))
+                bid_size = round(base_size * (1.0 - 0.5 * inventory_skew))
                 bid_price = self._snap_to_tick(best_bid - (i - 1) * self.cfg.tick_size)
-                orders.append(Order(generate_order_id(), "buy",  bid_price, bid_size, "limit_order", "market_maker", i))
+                orders.append(Order(generate_order_id(), "buy", bid_price, bid_size, "limit_order", "market_maker", i))
             if ("sell", i) in slots:
-                ask_size  = round(base_size * (1.0 + 0.5 * inventory_skew))
+                ask_size = round(base_size * (1.0 + 0.5 * inventory_skew))
                 ask_price = self._snap_to_tick(best_ask + (i - 1) * self.cfg.tick_size)
                 orders.append(Order(generate_order_id(), "sell", ask_price, ask_size, "limit_order", "market_maker", i))
         return orders
@@ -540,7 +622,7 @@ class Quoter:
         orders: List[Order] = []
         for oid in order_ids:
             if oid not in resting_orders:
-                continue  # order fully consumed between partial fires, or already cancelled
+                continue
             info = resting_orders[oid]
             topup_size = round(info["original_size"] - info["remaining_size"])
             if topup_size <= 0:
@@ -567,18 +649,41 @@ class Quoter:
                 return True
         return False
 
+    def _session_k(self, t: float) -> float:
+        """
+        Return the session-adjusted order-arrival intensity k for time t.
+        Tokyo (00:00-08:00 UTC) is the thinnest session; London (08:00-16:00) is the
+        deepest. Using a single k across all sessions misprice fill probability:
+        the same quoted distance attracts very different order flow in each regime.
+        """
+        t_mod = t % (24 * 3600)   # normalise to position within a 24h day
+        if t_mod < 8 * 3600:
+            return self.cfg.k * _SESSION_K_MULTIPLIERS["tokyo"]
+        elif t_mod < 16 * 3600:
+            return self.cfg.k * _SESSION_K_MULTIPLIERS["london"]
+        else:
+            return self.cfg.k * _SESSION_K_MULTIPLIERS["newyork"]
+
     def _estimate_vol(self, step: int) -> float:
-        if step < self.cfg.vol_window:
+        """
+        EWMA realized volatility on log-returns from market B.
+        Below vol_min_steps (not enough history for EWMA to be meaningful) we fall
+        back to the parametric vol — no arbitrary scaling floor applied.
+        Above vol_min_steps we use the full EWMA estimate; the parametric vol is
+        not used as a floor so the estimate can freely track calm regimes.
+        """
+        if step < self.cfg.vol_min_steps:
             return self.market_B.stock.vol
 
-        start    = max(0, step - self.cfg.vol_window)
-        prices   = self.market_B.noised_mid_price[start:step]
+        start = max(0, step - self.cfg.vol_window)
+        prices = self.market_B.noised_mid_price[start:step]
         log_rets = np.diff(np.log(prices))
-        dt_frac  = self.market_B.stock.time_step / TRADING_SECONDS_PER_YEAR
+        dt_frac = self.market_B.stock.time_step / TRADING_SECONDS_PER_YEAR
 
-        ewma_var     = pd.Series(log_rets).ewm(span=self.cfg.vol_window).var().iloc[-1]
+        ewma_var = pd.Series(log_rets).ewm(span=self.cfg.vol_window).var().iloc[-1]
         realized_vol = np.sqrt(ewma_var / dt_frac)
-        return max(realized_vol, 0.2 * self.market_B.stock.vol)
+        # Guard against numerical degenerate cases (flat price window) only
+        return max(realized_vol, 1e-6)
 
     def _get_stale_quotes(self, market: Market, step: int, lag: int) -> Tuple[float, float]:
         stale_step = max(0, step - lag)
@@ -589,12 +694,13 @@ class Quoter:
         Order flow imbalance in [-1, 1] over the last imbalance_window fills.
         +1 = all client buys (hitting our ask) -> bullish signal.
         -1 = all client sells (hitting our bid) -> bearish signal.
-        Returns 0 if no fill history yet.
+        Returns 0 if fewer than imbalance_min_samples fills have been observed:
+        below this count the window is too small and a single trade flips the signal.
         """
-        if not self._flow_history:
+        if len(self._flow_history) < self.cfg.imbalance_min_samples:
             return 0.0
-        n_ask_hits = self._flow_history.count("sell")  # client bought from us
-        n_bid_hits = self._flow_history.count("buy")   # client sold to us
+        n_ask_hits = self._flow_history.count("sell")
+        n_bid_hits = self._flow_history.count("buy")
         total = n_ask_hits + n_bid_hits
         return (n_ask_hits - n_bid_hits) / total
 

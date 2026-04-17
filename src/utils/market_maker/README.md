@@ -110,11 +110,30 @@ Partial fill top-up: the surviving partial order stays resting (no cancel). A co
 
 ### Step 9 — Dynamic hedge routing
 
-When `|q| / K > 90%`, target is flat (inventory = 0). Orders are split across B and C by a fee- and depth-aware score:
+When `|q| / K > 90%`, target is flat (inventory = 0). Hedge is executed as taker market orders on B and C.
+
+**Depth**: read from `market_B.depth[step − lag_B]` and `market_C.depth[step − lag_C]` — the actual EUR size quoted at the best price on each venue at the lagged step, same latency as price feeds. If depth arrays were not generated, falls back to `capital_K × weight_venue`.
+
+**Routing score** (higher = preferred):
 ```
-score_venue = 1 / (taker_fee + impact_factor / depth)
-ratio_B     = score_B / (score_B + score_C)
+vol_per_s    = σ / sqrt(T_year)
+latency_cost = vol_per_s × latency_venue_s   (expected adverse move during execution lag)
+impact_cost  = fair_mid × 0.0001 / depth     (Kyle-lambda market impact)
+
+score_venue  = 1 / (taker_fee + latency_cost + impact_cost)
+ratio_B      = score_B / (score_B + score_C)
 ```
+C's shorter latency (170ms vs 200ms) gives it a higher score when vol is elevated. Total hedge is capped at `depth_B + depth_C`; if B's allocation exceeds its depth, the overflow is rerouted to C.
+
+**Partial hedge and emergency fallback**:
+
+| Post-hedge `|q|/K` | Outcome |
+|---|---|
+| ≤ 80% (`hedge_partial_limit`) | Hedge succeeded (full or partial). Normal quoting resumes next step. |
+| > 80% | Available depth on B+C was insufficient. Sets `_hedge_emergency = True`. |
+
+When `_hedge_emergency` is active, `compute_quotes` multiplies the A-S penalty factor by `emergency_penalty_multiplier` (default 5×), forcing an extreme reservation price shift away from fair mid on the inventory side. This makes our quotes on A drastically asymmetric — aggressively attracting client flow in the reducing direction until inventory naturally recovers below 90%.
+
 Each hedge leg is recorded in `_fill_history` with `is_hedge=True` and `venue="B"` or `"C"`.
 
 ---
@@ -143,8 +162,8 @@ Each hedge leg is recorded in `_fill_history` with `is_hedge=True` and `venue="B
 **Cash flow convention (USD):**
 - MM sells EUR (client buys): `+price × size × (1 − maker_fee_A)`
 - MM buys EUR (client sells): `−price × size × (1 + maker_fee_A)`
-- Hedge sell on B/C: `+price × size × (1 − taker_fee)`
-- Hedge buy on B/C: `−price × size × (1 + taker_fee)`
+- Hedge sell on B/C: `+bid_venue × size × (1 − taker_fee)`  (crosses the bid as a taker)
+- Hedge buy on B/C: `−ask_venue × size × (1 + taker_fee)`  (crosses the ask as a taker)
 
 Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P&L, MtM P&L, inception spread, and inventory revaluation.
 
@@ -182,6 +201,8 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 | `latency_B_s / latency_C_s` | 0.200 / 0.170 | Data latency (seconds) |
 | `latency_hft_s` | 0.050 | HFT latency |
 | `delta_limit` | 0.90 | Hedge trigger (fraction of capital) |
+| `hedge_partial_limit` | 0.80 | If post-hedge ratio still above this, emergency mode activates |
+| `emergency_penalty_multiplier` | 5.0 | A-S penalty amplifier during emergency (skews quotes on A) |
 | `fee_A_maker` | 0.0001 | Exchange A maker fee |
 | `fee_A_taker` | 0.0004 | Exchange A taker fee |
 | `fee_B_maker` | 0.00009 | Exchange B maker fee |
@@ -197,7 +218,7 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 | `on_fill(event)` | Callback registered with `Order_book` — updates inventory, logs fill, queues re-quote or top-up |
 | `execute_hedge(step, t, fair_mid)` | Executes hedge if `needs_hedge()`, records legs in trade history. Returns True if hedge fired |
 | `needs_hedge()` | True if `|inventory| / capital_K > delta_limit` |
-| `hedge_order(depth_B, depth_C, fair_mid)` | Returns `(size_B, size_C, fee_cost)` — optimal routing split |
+| `hedge_order(depth_B, depth_C, fair_mid, sigma)` | Returns `(size_B, size_C, fee_cost)` — optimal routing split capped at available depth |
 | `trade_history` | Property — returns full fill log as DataFrame (14 columns) |
 | `snapshot(step, t)` | Full dict of intermediate quoting quantities for diagnostics |
 
@@ -219,9 +240,11 @@ stock.simulate_garch(n_days=1, dt_seconds=0.01)
 market_B = Market(stock)
 market_B.generate_noised_mid_price()
 market_B.build_spread(option="Skew", window_size=600, alpha=0.5, gamma=0.3, ema_span=500, threshold=3)
+market_B.generate_depth(mean_eur=500_000)   # EUR size at best quote each step
 
 market_C = copy.deepcopy(market_B)
 market_C.build_spread(option="Adaptive", window_size=600)
+market_C.generate_depth(mean_eur=200_000)   # C has less volume than B
 
 book = Order_book()
 mm = Quoter(market_B, market_C, config=QuoterConfig(), capital_K=1_000_000.0)
