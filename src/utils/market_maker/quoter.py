@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Tuple, Callable, Optional, Set
 
@@ -28,7 +29,7 @@ _SESSION_K_MULTIPLIERS = {
 class QuoterConfig:
     # Avellaneda-Stoikov core
     gamma: float = 0.1
-    k: float = 1.5
+    k: float = 0.3
     # Infinite-horizon discount rate (replaces T-t from the finite-horizon A-S formulation).
     omega: float = 1.0 / (8 * 3600)   # default: risk horizon ≈ one FX session
 
@@ -76,6 +77,9 @@ class QuoterConfig:
     delta_limit: float = 0.90
     hedge_partial_limit: float = 0.80
     emergency_penalty_multiplier: float = 5.0
+    # EOD flat: force inventory to zero every eod_flat_interval seconds.
+    # Set to 0.0 to disable (continuous running, no daily reset).
+    eod_flat_interval: float = 0. #86_400.0
 
     # Fee structure
     fee_A_maker: float = 0.0001
@@ -137,8 +141,16 @@ class Quoter:
         # Last session reset timestamp (in simulation seconds).
         self._last_session_reset_t: float = 0.0
 
-        # Order flow imbalance — rolling list of MM fill directions (capped at imbalance_window).
-        self._flow_history: List[str] = []
+        # EOD flat tracking: last day-boundary we have already flattened.
+        self._last_eod_day: int = -1
+
+        # Order flow imbalance — rolling deque of MM fill directions.
+        self._flow_history: deque = deque()
+        self._imbalance_n_sells: int = 0
+        self._imbalance_n_buys:  int = 0
+
+        # Incremental EWMA variance for vol estimation (O(1) per step).
+        self._ewma_var: float | None = None
 
         dt = market_B.stock.time_step
         self._dt: float = dt
@@ -148,6 +160,28 @@ class Quoter:
         gap_B = self.cfg.latency_B_s - self.cfg.latency_hft_s
         gap_C = self.cfg.latency_C_s - self.cfg.latency_hft_s
         self._effective_gap_s: float = (self.cfg.weight_B * gap_B + self.cfg.weight_C * gap_C)
+
+        # ── Precomputed constants (never change after __init__) ───────────────
+        self._inv_capital_K: float  = 1.0 / capital_K
+        self._inv_horizon_y: float  = 1.0 / (self.cfg.omega * TRADING_SECONDS_PER_YEAR)
+        self._two_over_gamma: float = 2.0 / self.cfg.gamma
+        # latency spread: 2·σ_per_s·√gap  →  2·√(gap/TSPY)·σ  (sigma factored out)
+        self._latency_coeff: float  = 2.0 * np.sqrt(self._effective_gap_s / TRADING_SECONDS_PER_YEAR)
+        # dt fraction used in _estimate_vol
+        self._dt_frac: float        = market_B.stock.time_step / TRADING_SECONDS_PER_YEAR
+
+        # ── Per-step caches ───────────────────────────────────────────────────
+        # Stale B/C quotes set by compute_quotes each step; reused by execute_hedge
+        # on the rare steps when a hedge fires, avoiding a second array lookup.
+        self._cache_bid_B: float = 0.0
+        self._cache_ask_B: float = 0.0
+        self._cache_bid_C: float = 0.0
+        self._cache_ask_C: float = 0.0
+        # Sigma set by compute_quotes; reused by execute_hedge (avoids second sqrt)
+        self._cache_sigma: float = market_B.stock.vol
+        # Previous mid-price for EWMA: avoids reading noised_mid_price[step-1]
+        # every step (it was already read as p1 at the previous step).
+        self._ewma_prev_price: float | None = None
 
 
     #  LISTENER INTERFACE  (called by the OrderBook)
@@ -187,12 +221,21 @@ class Quoter:
             "cash_flow": cash_flow,
             "inventory_after": self.inventory,
             "is_hedge": False,
+            "is_eod_flat": False,
             "venue": "A",
         })
 
         self._flow_history.append(event.direction)
-        if len(self._flow_history) > self.cfg.imbalance_window:
-            self._flow_history.pop(0)
+        if event.direction == "sell":
+            self._imbalance_n_sells += 1
+        else:
+            self._imbalance_n_buys += 1
+        while len(self._flow_history) > self.cfg.imbalance_window:
+            removed = self._flow_history.popleft()
+            if removed == "sell":
+                self._imbalance_n_sells -= 1
+            else:
+                self._imbalance_n_buys -= 1
 
         if event.is_full_fill:
             self._pending_fills.append(event)
@@ -229,6 +272,9 @@ class Quoter:
         7. Nothing triggered -> return [], [] (no action).
         """
 
+        # Step 0: update incremental EWMA vol estimate for this step
+        self._update_ewma_vol(step)
+
         # Step 1: drain both fill queues (accumulated since last call via on_fill)
         filled_slots = {(f.direction, f.level) for f in self._pending_fills}
         self._pending_fills.clear()
@@ -239,40 +285,54 @@ class Quoter:
         # Step 2: compute current theoretical best bid and ask
         bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
         bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
+        # Cache stale quotes so execute_hedge can reuse them without a second lookup.
+        self._cache_bid_B = bid_B
+        self._cache_ask_B = ask_B
+        self._cache_bid_C = bid_C
+        self._cache_ask_C = ask_C
         fair_mid = (max(bid_B, bid_C) + min(ask_B, ask_C)) / 2.0
 
         sigma = self._estimate_vol(step)
-        # Infinite-horizon inventory penalty
-        inv_horizon_y = 1.0 / (self.cfg.omega * TRADING_SECONDS_PER_YEAR)
+        self._cache_sigma = sigma   # reused by execute_hedge
+
+        inv_horizon_y = getattr(self, '_inv_horizon_y', 1.0 / (self.cfg.omega * TRADING_SECONDS_PER_YEAR))
         if self._hedge_emergency:
             inv_horizon_y *= self.cfg.emergency_penalty_multiplier
 
-        reservation_price = (
-            fair_mid
-            - self.inventory * self.cfg.gamma * sigma**2 * inv_horizon_y
+        # Session-adaptive k
+        k_eff = self._session_k(t)
+
+        # ── Spread first (needed to scale the reservation price shift) ──────────
+        # A-S optimal spread under infinite horizon
+        two_over_gamma = getattr(self, '_two_over_gamma', 2.0 / self.cfg.gamma)
+        spread_AS_bps = (
+            self.cfg.gamma * (sigma * 100.0) ** 2 * inv_horizon_y
+            + two_over_gamma * np.log(1.0 + self.cfg.gamma / k_eff)
         )
+        spread_AS = spread_AS_bps / 10_000.0 * fair_mid
+        latency_coeff = getattr(self, '_latency_coeff',
+                                2.0 * np.sqrt(self._effective_gap_s / TRADING_SECONDS_PER_YEAR))
+        spread_latency = latency_coeff * sigma   # = 2·σ·√(gap/TSPY)
+        inventory_ratio = self.inventory * getattr(self, '_inv_capital_K', 1.0 / self.capital_K)
+        spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
+        total_spread = spread_AS + spread_latency + spread_inventory
+        half_spread = max(total_spread / 2.0, self.cfg.tick_size)
+
+        # ── Reservation price ────────────────────────────────────────────────────
+        # The original A-S formula (inventory × γ × σ² × inv_horizon_y) produces a
+        # shift of ~530 bps at 10% inventory — orders of magnitude larger than the
+        # half-spread (~3 bps) — because inventory is in raw EUR (0-900k).
+        # Rescaled form: shift = inventory_ratio × half_spread, so that at 100%
+        # inventory the quoted mid is displaced by ±1 half-spread from fair_mid.
+        # Direction is correct (long → shift down → attract sells); magnitude is now
+        # calibrated relative to the spread, with no new parameters.
+        reservation_price = fair_mid - inventory_ratio * half_spread
 
         # Order-flow imbalance tilt (Cartea & Jaimungal)
         imbalance = self._compute_imbalance()
         reservation_price += self.cfg.alpha_imbalance * imbalance * fair_mid
 
-        # Session-adaptive k: adjust order-arrival intensity for current FX session liquidity
-        k_eff = self._session_k(t)
-
-        # A-S optimal spread under infinite horizon
-        spread_AS_bps = (
-            self.cfg.gamma * (sigma * 100.0) ** 2 * inv_horizon_y
-            + (2.0 / self.cfg.gamma) * np.log(1.0 + self.cfg.gamma / k_eff)
-        )
-        spread_AS = spread_AS_bps / 10_000.0 * fair_mid
-        sigma_per_s = sigma / np.sqrt(TRADING_SECONDS_PER_YEAR)
-        spread_latency = 2.0 * sigma_per_s * np.sqrt(self._effective_gap_s)
-        inventory_ratio = self.inventory / self.capital_K
-        spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
-        total_spread = spread_AS + spread_latency + spread_inventory
-        half_spread = max(total_spread / 2.0, self.cfg.tick_size)
-
-        # Asymmetric delta skew (Guéant), using session-adaptive k
+        # ── Asymmetric delta skew (Guéant) ────────────────────────────────────────
         if self.cfg.use_asymmetric_delta:
             skew_delta = self.inventory * np.sqrt(self.cfg.gamma * sigma**2 / (2.0 * k_eff))
             skew_delta = np.clip(skew_delta, -(half_spread - 0.5 * self.cfg.tick_size),
@@ -412,9 +472,8 @@ class Quoter:
 
     def execute_hedge(self, step: int, t: float, fair_mid: float) -> bool:
         """
-        Execute the optimal hedge across B and C when inventory breaches delta_limit.
-        Records each leg in _fill_history with is_hedge=True and venue="B"/"C".
-        Returns True if any hedge leg was executed.
+        Execute the optimal hedge across B and C when inventory breaches delta_limit,
+        or at EOD (every eod_flat_interval seconds) regardless of inventory size.
 
         Depth is read from market_B.depth / market_C.depth at the lagged step (same
         latency as prices). If depth arrays are not generated, falls back to capital_K
@@ -430,7 +489,15 @@ class Quoter:
                                     so compute_quotes applies an extreme penalty to force
                                     asymmetric quotes on A toward inventory reduction.
         """
-        if not self.needs_hedge():
+        # EOD flat: force inventory to zero each time we cross a day boundary.
+        force_flat = False
+        if self.cfg.eod_flat_interval > 0.0 and abs(self.inventory) > 0.0:
+            current_day = int(t // self.cfg.eod_flat_interval)
+            if current_day > self._last_eod_day:
+                self._last_eod_day = current_day
+                force_flat = True
+
+        if not force_flat and not self.needs_hedge():
             self._hedge_emergency = False
             return False
 
@@ -443,11 +510,18 @@ class Quoter:
                    if self.market_C.depth is not None
                    else self.capital_K * self.cfg.weight_C)
 
-        # Read actual bid/ask at the lagged step for each venue — these are the prices
-        bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
-        bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
+        # Reuse stale quotes and sigma already computed by compute_quotes this step.
+        bid_B = getattr(self, '_cache_bid_B', None)
+        if bid_B is None:
+            bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
+            bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
+            sigma = self._estimate_vol(step)
+        else:
+            ask_B = self._cache_ask_B
+            bid_C = self._cache_bid_C
+            ask_C = self._cache_ask_C
+            sigma = getattr(self, '_cache_sigma', self._estimate_vol(step))
 
-        sigma = self._estimate_vol(step)
         size_B, size_C, _ = self.hedge_order(depth_B, depth_C, fair_mid, sigma)
 
         inventory_after = self.inventory + size_B + size_C
@@ -485,6 +559,7 @@ class Quoter:
                 "cash_flow": cash_flow,
                 "inventory_after": self.inventory,
                 "is_hedge": True,
+                "is_eod_flat": force_flat,
                 "venue": venue,
             })
 
@@ -504,14 +579,6 @@ class Quoter:
         inv_horizon_y = 1.0 / (self.cfg.omega * TRADING_SECONDS_PER_YEAR)
         k_eff = self._session_k(t)
 
-        reservation_price = (
-            fair_mid
-            - self.inventory * self.cfg.gamma * sigma**2 * inv_horizon_y
-        )
-
-        imbalance = self._compute_imbalance()
-        reservation_price += self.cfg.alpha_imbalance * imbalance * fair_mid
-
         spread_AS_bps = (
             self.cfg.gamma * (sigma * 100.0) ** 2 * inv_horizon_y
             + (2.0 / self.cfg.gamma) * np.log(1.0 + self.cfg.gamma / k_eff)
@@ -523,6 +590,10 @@ class Quoter:
         spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
         total_spread = spread_AS + spread_latency + spread_inventory
         half_spread = max(total_spread / 2.0, self.cfg.tick_size)
+
+        reservation_price = fair_mid - inventory_ratio * half_spread
+        imbalance = self._compute_imbalance()
+        reservation_price += self.cfg.alpha_imbalance * imbalance * fair_mid
 
         if self.cfg.use_asymmetric_delta:
             skew_delta = self.inventory * np.sqrt(
@@ -574,7 +645,7 @@ class Quoter:
             return pd.DataFrame(columns=["order_id", "level", "step", "t", "direction",
                                          "price", "size", "is_full_fill", "fair_mid",
                                          "fee_cost", "cash_flow", "inventory_after",
-                                         "is_hedge", "venue"])
+                                         "is_hedge", "is_eod_flat", "venue"])
         return pd.DataFrame(self._fill_history)
 
 
@@ -664,26 +735,38 @@ class Quoter:
         else:
             return self.cfg.k * _SESSION_K_MULTIPLIERS["newyork"]
 
+    def _update_ewma_vol(self, step: int) -> None:
+        """
+        Incremental EWMA variance update — O(1) per step.
+        Call exactly once per step, before _estimate_vol().
+        Uses a single log-return from the previous step to current step.
+        _ewma_prev_price caches the last p1 so we avoid reading index step-1 twice.
+        """
+        p1 = float(self.market_B.noised_mid_price[step])
+        if self._ewma_prev_price is None:
+            self._ewma_prev_price = p1
+            return
+        p0 = self._ewma_prev_price
+        self._ewma_prev_price = p1
+        if p0 <= 0.0:
+            return
+        r = np.log(p1 / p0)
+        alpha = 2.0 / (self.cfg.vol_window + 1)
+        if self._ewma_var is None:
+            self._ewma_var = r * r
+        else:
+            self._ewma_var = alpha * r * r + (1.0 - alpha) * self._ewma_var
+
     def _estimate_vol(self, step: int) -> float:
         """
-        EWMA realized volatility on log-returns from market B.
-        Below vol_min_steps (not enough history for EWMA to be meaningful) we fall
-        back to the parametric vol — no arbitrary scaling floor applied.
-        Above vol_min_steps we use the full EWMA estimate; the parametric vol is
-        not used as a floor so the estimate can freely track calm regimes.
+        Return the current annualised volatility estimate.
+        Uses the incremental EWMA maintained by _update_ewma_vol().
+        Falls back to the parametric vol below vol_min_steps.
         """
-        if step < self.cfg.vol_min_steps:
+        if step < self.cfg.vol_min_steps or self._ewma_var is None:
             return self.market_B.stock.vol
-
-        start = max(0, step - self.cfg.vol_window)
-        prices = self.market_B.noised_mid_price[start:step]
-        log_rets = np.diff(np.log(prices))
-        dt_frac = self.market_B.stock.time_step / TRADING_SECONDS_PER_YEAR
-
-        ewma_var = pd.Series(log_rets).ewm(span=self.cfg.vol_window).var().iloc[-1]
-        realized_vol = np.sqrt(ewma_var / dt_frac)
-        # Guard against numerical degenerate cases (flat price window) only
-        return max(realized_vol, 1e-6)
+        dt_frac = getattr(self, '_dt_frac', self.market_B.stock.time_step / TRADING_SECONDS_PER_YEAR)
+        return max(np.sqrt(self._ewma_var / dt_frac), 1e-6)
 
     def _get_stale_quotes(self, market: Market, step: int, lag: int) -> Tuple[float, float]:
         stale_step = max(0, step - lag)
@@ -694,15 +777,12 @@ class Quoter:
         Order flow imbalance in [-1, 1] over the last imbalance_window fills.
         +1 = all client buys (hitting our ask) -> bullish signal.
         -1 = all client sells (hitting our bid) -> bearish signal.
-        Returns 0 if fewer than imbalance_min_samples fills have been observed:
-        below this count the window is too small and a single trade flips the signal.
+        O(1): maintained incrementally via _imbalance_n_sells / _imbalance_n_buys.
         """
-        if len(self._flow_history) < self.cfg.imbalance_min_samples:
+        total = self._imbalance_n_sells + self._imbalance_n_buys
+        if total < self.cfg.imbalance_min_samples:
             return 0.0
-        n_ask_hits = self._flow_history.count("sell")
-        n_bid_hits = self._flow_history.count("buy")
-        total = n_ask_hits + n_bid_hits
-        return (n_ask_hits - n_bid_hits) / total
+        return (self._imbalance_n_sells - self._imbalance_n_buys) / total
 
     def _snap_to_tick(self, price: float) -> float:
         tick = self.cfg.tick_size

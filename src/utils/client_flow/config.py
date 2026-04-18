@@ -10,10 +10,10 @@
 # The paper uses A = Λ/α = 140, k = αK = 1.5 with δ in dollars (s≈100).
 # For FX (EUR/USD ≈ 1.10) we express δ in bps so k has the same
 # interpretive meaning: k=1.5 → half-life ≈ 0.46 bp.
-A_BUY  = 500      # buy-side arrival rate (per second at δ=0)
-A_SELL = 500        # sell-side arrival rate (can differ for asymmetry)
-K_BUY  = 0.002          # buy decay rate per bp  (matches QuoterConfig.k)
-K_SELL = 0.002         # sell decay rate per bp
+A_BUY  = 0.007   # buy-side arrival rate (per second at δ=0)
+A_SELL = 0.007   # sell-side arrival rate (can differ for asymmetry)
+K_BUY  = 0.3         # buy decay rate per bp  (matches QuoterConfig.k)
+K_SELL = 0.3       # sell decay rate per bp
 
 # Power-law size distribution: f(x) ∝ x^(-1-α)   (paper eq. 2.8)
 ALPHA    = 1.5        # tail exponent (Gabaix et al.: 1.5, Gopikrishnan: 1.53)

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from ..stock_simulation import Stock
 from ..stock_simulation.config import TRADING_SECONDS_PER_YEAR
@@ -80,58 +81,57 @@ class Market(object):
         self.depth = mean_eur * (mean_spread / spread)
         return self.depth
 
-    def build_static_spread(self, tick_factor = 100):
+    def build_static_spread(self, spread_bps: float = 1.0):
 
         if self.noised_mid_price is None:
             print(f"Error, no prices generated for this market, run generate_noised_mid_price")
-        spread = self.noised_mid_price * self.stock.tick_size * tick_factor/2
+        # Half-spread expressed in bps — price-independent
+        spread = self.noised_mid_price * spread_bps / 10_000
         self.ask_price_constant = self.noised_mid_price + spread
         self.bid_price_constant = self.noised_mid_price - spread
         self._active_spread = "Static"
 
 
     
-    def build_stochastic_spread(self, window_size = 50, alpha = 0.016, tick_factor = 100):
-        # Baseline half-spread: price-adaptive (full array, not just t=0)
-        # tick_factor controls the minimum spread width in ticks
-        spread_0 = self.noised_mid_price * self.stock.tick_size * tick_factor / 2
+    def build_stochastic_spread(self, window_size = 50, alpha = 0.5, spread_bps: float = 1.0):
+        # Baseline half-spread in bps — price-independent
+        spread_0 = self.noised_mid_price * spread_bps / 10_000
 
         # Annualized realized volatility, rolling window of `window_size` steps
         vol_realized = self.stock.compute_realized_volatility(window_size=window_size)
-
-        # Fill the warmup period with the stock's input vol (annualized) —
-        # a market maker would have a prior on vol before the day starts
         vol_realized[:window_size] = self.stock.vol
 
-        # Store for plotting — lets compare_spreads overlay vol on the width panel
+        # Store for plotting
         self._rv_sto     = vol_realized
         self._window_sto = window_size
 
-        # Half-spread = baseline + volatility-scaled component
-        # alpha is in price / annualized_vol units — tune to control vol sensitivity
-        spread = np.round(spread_0 + alpha * vol_realized, 4)
+        # EMA-smooth vol so spread width reflects regime changes, not tick-by-tick noise
+        smooth_span = max(window_size * 18, 1)
+        vol_smooth = pd.Series(vol_realized).ewm(span=smooth_span, adjust=False).mean().to_numpy()
+
+        # Normalized formula: spread scales with vol ratio → price-independent
+        # alpha=0.5: at 2× vol, half-spread = 2× spread_0 (doubles); at normal vol = 1.5× spread_0
+        spread = np.round(spread_0 * (1.0 + alpha * vol_smooth / self.stock.vol), 8)
 
         self.ask_price_sto = self.noised_mid_price + spread
         self.bid_price_sto = self.noised_mid_price - spread
         self._active_spread = "Sto"
 
-    def build_adaptive_spread(self, window_size=50, alpha=0.016, tick_factor=100):
-        # Baseline half-spread: same price-adaptive anchor as the stochastic spread
-        spread_0 = self.noised_mid_price * self.stock.tick_size * tick_factor / 2
+    def build_adaptive_spread(self, window_size=50, alpha=0.5, spread_bps: float = 1.0):
+        # Baseline half-spread in bps — price-independent
+        spread_0 = self.noised_mid_price * spread_bps / 10_000
 
         # Annualized realized volatility, rolling window of `window_size` steps
         vol_realized = self.stock.compute_realized_volatility(window_size=window_size)
-
-        # Warmup: use the known input vol as prior (no look-ahead)
         vol_realized[:window_size] = self.stock.vol
 
-        # Vol excess: positive when market is more volatile than expected,
-        # negative when calmer — this is what drives the spread adjustment
-        vol_excess = vol_realized - self.stock.vol
+        # EMA-smooth vol so spread width reflects regime changes, not tick-by-tick noise
+        smooth_span = max(window_size * 18, 1)
+        vol_smooth = pd.Series(vol_realized).ewm(span=smooth_span, adjust=False).mean().to_numpy()
 
-        # Half-spread widens when vol_excess > 0, narrows when vol_excess < 0
-        # alpha controls sensitivity (price / annualized_vol units)
-        spread = np.round(spread_0 + alpha * vol_excess, 4)
+        # Adaptive: spread = spread_0 at normal vol, widens above, tightens below.
+        # alpha=0.5: at 2× vol → spread_0 * 1.5; at 0.5× vol → spread_0 * 0.75
+        spread = np.round(spread_0 * (1.0 + alpha * (vol_smooth / self.stock.vol - 1.0)), 8)
 
         # Floor at 10% of baseline to prevent spread collapsing near zero
         spread = np.maximum(spread, spread_0 * 0.1)
@@ -151,8 +151,9 @@ class Market(object):
         kappa_u:     float = 50.0,
         kappa_d:     float = 2.0,
         window_size: int   = 5000,
-        tick_factor: int   = 100,
+        spread_bps:  float = 1.0,
         sigma_s:     float = 0.0,
+        tick_factor: int | None = None,   # deprecated, ignored — kept for backward compat
     ):
         """
         Build bid/ask prices using the asymmetric mean-reverting spread model.
@@ -172,6 +173,7 @@ class Market(object):
         kappa_u     : upward reversion speed in 1/s. Default 50 → half-life ~14ms.
         kappa_d     : downward reversion speed in 1/s. Default 2 → half-life ~350ms.
         window_size : lookback steps for the rolling realized vol estimate.
+        spread_bps  : static floor half-spread in bps (default 1.0 = 1 bp).
         sigma_s     : optional noise on the spread path (0 = disabled).
         """
 
@@ -185,9 +187,9 @@ class Market(object):
 
         # ── Step 4: Static floor S_0 ───────────────────────────────────────────
         # Same formula as build_static_spread so all spreads share the same baseline:
-        # half-spread = mid_price * tick_size * tick_factor / 2
+        # half-spread = mid_price * spread_bps / 10_000 (price-independent)
         if s0 is None:
-            s0 = self.noised_mid_price * self.stock.tick_size * tick_factor / 2
+            s0 = self.noised_mid_price * spread_bps / 10_000
 
         # ── Step 5: Alpha calibration ──────────────────────────────────────────
         # Default rule from doc section 12: a 2-sigma vol event doubles the spread
@@ -226,7 +228,7 @@ class Market(object):
         gamma:       float = 0.3,
         ema_span:    int   = 500,
         threshold:   float = 1.5,
-        tick_factor: int   = 100,
+        spread_bps:  float = 1.0,
     ):
         """
         Build bid/ask with directional skew based on short-term momentum.
@@ -261,14 +263,18 @@ class Market(object):
 
         # --- Vol-adaptive half-spread width ---
         rv_ann   = compute_rv_zero_mean(self.stock.simulation, window_size, dt)
-        spread_0 = self.noised_mid_price * self.stock.tick_size * tick_factor / 2
+        spread_0 = self.noised_mid_price * spread_bps / 10_000
 
-        # Cap rv_ann at 3× the parametric vol before using it for the spread width.
-        # Without this, a single jump (e.g. 0.5% in 10ms) inflates the 600-step
-        # rolling RV to ~550% ann., blowing up half_spread and making bid/ask
-        # diverge symmetrically by several price units — the opposite of skewing.
+        # Cap rv_ann at 3× the parametric vol before smoothing.
         rv_ann_capped = np.minimum(rv_ann, 3.0 * self.stock.vol)
-        half_spread   = spread_0 + alpha * rv_ann_capped
+
+        # EMA-smooth the vol estimate so spread width moves slowly (regime changes)
+        # rather than wiggling at tick frequency. Span = 18× the rolling window.
+        smooth_span = max(window_size * 18, 1)
+        rv_smooth = pd.Series(rv_ann_capped).ewm(span=smooth_span, adjust=False).mean().to_numpy()
+
+        # Scale half-spread by smoothed vol level relative to parametric vol.
+        half_spread   = spread_0 * (1.0 + alpha * rv_smooth / self.stock.vol)
 
         # --- EMA momentum signal ---
         log_rets = np.diff(np.log(self.noised_mid_price))   # shape (N,)
@@ -419,6 +425,24 @@ class Market(object):
         ax.spines["right"].set_visible(False)
         ax.spines["left"].set_color("#444444")
         ax.spines["bottom"].set_color("#444444")
+
+        if self.depth is not None:
+            depth_color = "#4488ff"
+            ax_depth = ax.twinx()
+            depth_m = self.depth / 1e6
+            ax_depth.plot(t, depth_m, linewidth=0.7, color=depth_color, alpha=0.7, label="Depth (M EUR)")
+            ax_depth.fill_between(t, depth_m, alpha=0.10, color=depth_color)
+            # Anchor 0 at the bottom and cap at 20% of chart height so depth
+            # stays in the lower strip without touching the price series
+            ax_depth.set_ylim(0, depth_m.max() * 5)
+            ax_depth.set_ylabel("Depth (M EUR)", color=depth_color, fontsize=10)
+            ax_depth.tick_params(colors=depth_color, labelsize=9)
+            ax_depth.spines["right"].set_color(depth_color)
+            ax_depth.spines["top"].set_visible(False)
+            ax_depth.spines["left"].set_visible(False)
+            ax_depth.spines["bottom"].set_visible(False)
+            ax_depth.legend(loc="upper right", facecolor="#222222", edgecolor="#444444",
+                            labelcolor="white", fontsize=9)
 
         plt.tight_layout()
         plt.show()
