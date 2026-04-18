@@ -29,6 +29,9 @@ class PnLTracker:
         """
         Add derived columns to the trade history DataFrame.
 
+        Sorts by time first so cumulative columns and plots are always
+        chronological even if _fill_history was appended across multiple runs.
+
         Columns added
         -------------
         cum_cash  : cumulative realized cash P&L (USD)
@@ -36,7 +39,7 @@ class PnLTracker:
         mtm_pnl   : running MtM P&L per row = cum_cash + inventory_after * fair_mid
                     (uses the fair_mid at the time of each fill as the mark price)
         """
-        df = df.copy()
+        df = df.sort_values('t').reset_index(drop=True)
         df['cum_cash'] = df['cash_flow'].cumsum()
         df['cum_fees'] = df['fee_cost'].cumsum()
         df['mtm_pnl'] = df['cum_cash'] + df['inventory_after'] * df['fair_mid']
@@ -125,6 +128,7 @@ class PnLTracker:
         """
         if df.empty:
             return pd.DataFrame()
+        df = df.sort_values('t').reset_index(drop=True)
         inv_delta = df['inventory_after'].diff().fillna(df['inventory_after'].iloc[0]).values
         cash = df['cash_flow'].values
         mids = df['fair_mid'].values
@@ -213,11 +217,10 @@ class PnLTracker:
             print("No trades to plot.")
             return
 
-        aug = PnLTracker.augment(df)
+        aug = PnLTracker.augment(df)  # already sorted by t, index reset to 0..n-1
 
         # Running inception spread per fill (MM fills on A only, hedges contribute 0)
         inception_per_fill = pd.Series(0.0, index=aug.index)
-        mm_idx = aug[~aug['is_hedge']].index
         sells_idx = aug[(~aug['is_hedge']) & (aug['direction'] == 'sell')].index
         buys_idx  = aug[(~aug['is_hedge']) & (aug['direction'] == 'buy')].index
         inception_per_fill.loc[sells_idx] = (
@@ -231,9 +234,9 @@ class PnLTracker:
         aug['cum_inception'] = inception_per_fill.cumsum()
         aug['cum_revaluation'] = aug['mtm_pnl'] - aug['cum_inception'] + aug['cum_fees']
 
-        # Cumulative fees split by venue
-        maker_fees = df[~df['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
-        hedge_fees = df[df['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
+        # Cumulative fees split by venue — use aug (sorted) not the raw df
+        maker_fees = aug[~aug['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
+        hedge_fees = aug[aug['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
 
         hedges = aug[aug['is_hedge']]
 

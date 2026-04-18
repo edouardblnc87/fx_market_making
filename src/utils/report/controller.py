@@ -137,6 +137,13 @@ class Controller:
             'total_quotes_posted': np.empty(n, dtype=np.int64),
         }
         self._log_ptr = 0
+        self._n_fills_prev    = 0
+        self._n_quotes_posted = 0
+        self._step_log        = []
+        # Reset quoter fill history so re-running doesn't accumulate stale entries.
+        self.quoter._fill_history.clear()
+        self.quoter._pending_fills.clear()
+        self.quoter._pending_topups.clear()
 
         if limit is not None:
             for s in tqdm(range(n)):
