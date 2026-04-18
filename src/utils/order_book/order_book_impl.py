@@ -50,10 +50,18 @@ class Order_book:
         self._spread_init   = spread_init
         self.n_levels       = n_levels
 
-        # Hot-path storage: plain dict, no pandas overhead.
-        # {order_id: {direction, price, size, origin, level, seq}}
+        # Hot-path storage: MM and client orders kept in separate dicts to avoid
+        # scanning the full book on every try_clear call.
+        # _orders:        MM limit orders only  {order_id: {direction, price, size, ...}}
+        # _client_orders: client orders only
         self._orders: dict = {}
+        self._client_orders: dict = {}
         self._seq: int = 0          # monotonic sequence for time-priority
+
+        # Cached sorted MM order lists; rebuilt only when the MM book changes.
+        self._sorted_mm_asks: list = []
+        self._sorted_mm_bids: list = []
+        self._mm_dirty: bool = True  # True → rebuild caches before next try_clear
 
         # Match log: list of dicts, converted to DataFrame on demand.
         self._match_log: list = []
@@ -68,10 +76,11 @@ class Order_book:
 
     @property
     def _df_order_book(self) -> pd.DataFrame:
-        if not self._orders:
+        combined = {**self._orders, **self._client_orders}
+        if not combined:
             return pd.DataFrame(columns=["Id", "Direction", "Price", "Size",
                                          "Type", "Origin", "Level"])
-        rows = [{"Id": oid, **o} for oid, o in self._orders.items()]
+        rows = [{"Id": oid, **o} for oid, o in combined.items()]
         df = pd.DataFrame(rows).set_index("Id")
         # remove internal seq column from public view
         return df.drop(columns=["seq"], errors="ignore")
@@ -106,11 +115,12 @@ class Order_book:
 
     @property
     def mm_resting_orders(self) -> dict:
-        return dict(self._mm_resting)
+        # Return live dict directly — callers must not mutate it.
+        return self._mm_resting
 
     def add_order(self, order: Order) -> None:
         self._seq += 1
-        self._orders[order._id] = {
+        entry = {
             "direction": order._direction,
             "price":     order._price,
             "size":      order._size,
@@ -119,6 +129,7 @@ class Order_book:
             "seq":       self._seq,
         }
         if order._origin == "market_maker":
+            self._orders[order._id] = entry
             self._mm_resting[order._id] = {
                 "price":          order._price,
                 "direction":      order._direction,
@@ -127,15 +138,22 @@ class Order_book:
                 "original_size":  order._size,
                 "remaining_size": order._size,
             }
+            self._mm_dirty = True
+        else:
+            self._client_orders[order._id] = entry
 
     def cancel_orders(self, ids: list) -> None:
+        if not ids:
+            return
         for oid in ids:
             self._orders.pop(oid, None)
             self._mm_resting.pop(oid, None)
+        self._mm_dirty = True
 
     def cancel_all_mm_orders(self) -> None:
-        mm_ids = [oid for oid, o in self._orders.items() if o["origin"] == "market_maker"]
-        self.cancel_orders(mm_ids)
+        self._orders.clear()
+        self._mm_resting.clear()
+        self._mm_dirty = True
 
     def post_mm_quotes(self, quotes: list) -> None:
         for order in quotes:
@@ -151,36 +169,50 @@ class Order_book:
         """
         Match client orders against MM orders (price-time priority, partial fills).
 
-        MM orders are sorted ONCE per try_clear() call — not once per client order.
-        All state lives in self._orders (plain dict), avoiding pandas overhead.
+        Sorted MM order lists are rebuilt only when the MM book has changed
+        (_mm_dirty flag), not on every call. Client orders live in a separate
+        dict so there is no full-book scan to separate client vs MM entries.
         """
+        client_orders = self._client_orders
+        if not client_orders:
+            return
+
         orders = self._orders
 
+        # Rebuild sorted MM caches only when MM book has changed.
+        if self._mm_dirty:
+            self._sorted_mm_asks = sorted(
+                [(oid, o) for oid, o in orders.items() if o["direction"] == "sell"],
+                key=lambda x: (x[1]["price"], x[1]["seq"]),
+            )
+            self._sorted_mm_bids = sorted(
+                [(oid, o) for oid, o in orders.items() if o["direction"] == "buy"],
+                key=lambda x: (-x[1]["price"], x[1]["seq"]),
+            )
+            self._mm_dirty = False
+
+        mm_asks = self._sorted_mm_asks
+        mm_bids = self._sorted_mm_bids
+
         # ── Client buys vs MM asks ────────────────────────────────────────────
-        mm_asks = sorted(
-            [(oid, o) for oid, o in orders.items()
-             if o["origin"] == "market_maker" and o["direction"] == "sell"],
-            key=lambda x: (x[1]["price"], x[1]["seq"]),
-        )
         client_buys = sorted(
-            [(oid, o) for oid, o in orders.items()
-             if o["origin"] == "client" and o["direction"] == "buy"],
+            [(oid, o) for oid, o in client_orders.items() if o["direction"] == "buy"],
             key=lambda x: (-x[1]["price"], x[1]["seq"]),
         )
 
         for cb_id, _ in client_buys:
-            if cb_id not in orders:
+            if cb_id not in client_orders:
                 continue
             for ma_id, ma in mm_asks:
-                if cb_id not in orders:
+                if cb_id not in client_orders:
                     break
                 if ma_id not in orders:
                     continue
-                if orders[cb_id]["price"] < ma["price"]:
+                if client_orders[cb_id]["price"] < ma["price"]:
                     break
 
-                matched = min(orders[cb_id]["size"], orders[ma_id]["size"])
-                orders[cb_id]["size"] -= matched
+                matched = min(client_orders[cb_id]["size"], orders[ma_id]["size"])
+                client_orders[cb_id]["size"] -= matched
                 orders[ma_id]["size"] -= matched
 
                 self._match_log.append({
@@ -201,34 +233,28 @@ class Order_book:
                 elif matched > 0:
                     self._fire_fill(ma_id, "sell", ma["price"], matched, ma["level"], False)
 
-                if cb_id in orders and orders[cb_id]["size"] == 0:
-                    del orders[cb_id]
+                if cb_id in client_orders and client_orders[cb_id]["size"] == 0:
+                    del client_orders[cb_id]
 
         # ── Client sells vs MM bids ───────────────────────────────────────────
-        mm_bids = sorted(
-            [(oid, o) for oid, o in orders.items()
-             if o["origin"] == "market_maker" and o["direction"] == "buy"],
-            key=lambda x: (-x[1]["price"], x[1]["seq"]),
-        )
         client_sells = sorted(
-            [(oid, o) for oid, o in orders.items()
-             if o["origin"] == "client" and o["direction"] == "sell"],
+            [(oid, o) for oid, o in client_orders.items() if o["direction"] == "sell"],
             key=lambda x: (x[1]["price"], x[1]["seq"]),
         )
 
         for cs_id, _ in client_sells:
-            if cs_id not in orders:
+            if cs_id not in client_orders:
                 continue
             for mb_id, mb in mm_bids:
-                if cs_id not in orders:
+                if cs_id not in client_orders:
                     break
                 if mb_id not in orders:
                     continue
-                if orders[cs_id]["price"] > mb["price"]:
+                if client_orders[cs_id]["price"] > mb["price"]:
                     break
 
-                matched = min(orders[cs_id]["size"], orders[mb_id]["size"])
-                orders[cs_id]["size"] -= matched
+                matched = min(client_orders[cs_id]["size"], orders[mb_id]["size"])
+                client_orders[cs_id]["size"] -= matched
                 orders[mb_id]["size"] -= matched
 
                 self._match_log.append({
@@ -249,8 +275,8 @@ class Order_book:
                 elif matched > 0:
                     self._fire_fill(mb_id, "buy", mb["price"], matched, mb["level"], False)
 
-                if cs_id in orders and orders[cs_id]["size"] == 0:
-                    del orders[cs_id]
+                if cs_id in client_orders and client_orders[cs_id]["size"] == 0:
+                    del client_orders[cs_id]
 
     def _fire_fill(self, order_id, direction, price, size, level, is_full_fill) -> None:
         if not is_full_fill and order_id in self._mm_resting:
@@ -271,10 +297,12 @@ class Order_book:
 
     def __repr__(self):
         df = self._df_order_book
+        n_mm = len(self._orders)
+        n_cl = len(self._client_orders)
         return (
-            f"Order_book — {len(self._orders)} resting orders "
-            f"({sum(1 for o in self._orders.values() if o['direction']=='buy')} bids, "
-            f"{sum(1 for o in self._orders.values() if o['direction']=='sell')} asks)\n"
+            f"Order_book — {n_mm} MM orders + {n_cl} client orders "
+            f"({sum(1 for o in self._orders.values() if o['direction']=='buy')} MM bids, "
+            f"{sum(1 for o in self._orders.values() if o['direction']=='sell')} MM asks)\n"
             f"{df.head()}"
         )
 
