@@ -108,23 +108,20 @@ class PnLTracker:
         return float(df['inventory_after'].iloc[-1]) * current_mid
 
     @staticmethod
-    def per_trade_mtm_evolution(df: pd.DataFrame) -> pd.DataFrame:
+    def per_trade_mtm_evolution(
+        df: pd.DataFrame,
+        fill_indices: list[int] | None = None,
+    ) -> pd.DataFrame:
         """
         Decompose the aggregate MtM into per-fill contributions at each fill time.
 
-        Returns DataFrame shape (n_fills, n_fills):
-          - index   = fill evaluation times (df['t'] values)
-          - columns = fill index 0 .. n-1
-          - value[j, i] = cash_flow_i + Δinv_i × fair_mid_j   for j >= i, else NaN
+        When fill_indices is None (default), all n fills are computed → shape (n, n).
+        When fill_indices is given, only those column fills are evaluated → shape (n, k)
+        where k = len(fill_indices).  Rows are still all n fill times.
 
-        Identity: ev.sum(axis=1) == augment(df)['mtm_pnl']  (element-wise, to float precision)
+        value[j, i] = cash_flow_i + Δinv_i × fair_mid_j   for j >= row_i, else NaN
 
-        Interpretation
-        --------------
-        At inception (j == i): value ≈ inception_spread_i − fee_i  (locked spread net of cost)
-        Afterwards     (j > i): value tracks how the trade's open inventory is marked to market
-                                as fair_mid evolves — positive drift means the fill is in profit,
-                                negative drift means adverse selection.
+        Identity (full matrix only): ev.sum(axis=1) == augment(df)['mtm_pnl']
         """
         if df.empty:
             return pd.DataFrame()
@@ -132,10 +129,11 @@ class PnLTracker:
         cash = df['cash_flow'].values
         mids = df['fair_mid'].values
         n = len(df)
-        mat = np.full((n, n), np.nan)
-        for i in range(n):
-            mat[i:, i] = cash[i] + inv_delta[i] * mids[i:]
-        return pd.DataFrame(mat, index=df['t'].values, columns=range(n))
+        cols = list(range(n)) if fill_indices is None else fill_indices
+        mat = np.full((n, len(cols)), np.nan)
+        for col_idx, i in enumerate(cols):
+            mat[i:, col_idx] = cash[i] + inv_delta[i] * mids[i:]
+        return pd.DataFrame(mat, index=df['t'].values, columns=cols)
 
     @staticmethod
     def report(df: pd.DataFrame, current_mid: float) -> dict:
