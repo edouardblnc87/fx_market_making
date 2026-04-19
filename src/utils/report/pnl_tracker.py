@@ -29,6 +29,9 @@ class PnLTracker:
         """
         Add derived columns to the trade history DataFrame.
 
+        Sorts by time first so cumulative columns and plots are always
+        chronological even if _fill_history was appended across multiple runs.
+
         Columns added
         -------------
         cum_cash  : cumulative realized cash P&L (USD)
@@ -36,7 +39,7 @@ class PnLTracker:
         mtm_pnl   : running MtM P&L per row = cum_cash + inventory_after * fair_mid
                     (uses the fair_mid at the time of each fill as the mark price)
         """
-        df = df.copy()
+        df = df.sort_values('t').reset_index(drop=True)
         df['cum_cash'] = df['cash_flow'].cumsum()
         df['cum_fees'] = df['fee_cost'].cumsum()
         df['mtm_pnl'] = df['cum_cash'] + df['inventory_after'] * df['fair_mid']
@@ -108,34 +111,33 @@ class PnLTracker:
         return float(df['inventory_after'].iloc[-1]) * current_mid
 
     @staticmethod
-    def per_trade_mtm_evolution(df: pd.DataFrame) -> pd.DataFrame:
+    def per_trade_mtm_evolution(
+        df: pd.DataFrame,
+        fill_indices: list[int] | None = None,
+    ) -> pd.DataFrame:
         """
         Decompose the aggregate MtM into per-fill contributions at each fill time.
 
-        Returns DataFrame shape (n_fills, n_fills):
-          - index   = fill evaluation times (df['t'] values)
-          - columns = fill index 0 .. n-1
-          - value[j, i] = cash_flow_i + Δinv_i × fair_mid_j   for j >= i, else NaN
+        When fill_indices is None (default), all n fills are computed → shape (n, n).
+        When fill_indices is given, only those column fills are evaluated → shape (n, k)
+        where k = len(fill_indices).  Rows are still all n fill times.
 
-        Identity: ev.sum(axis=1) == augment(df)['mtm_pnl']  (element-wise, to float precision)
+        value[j, i] = cash_flow_i + Δinv_i × fair_mid_j   for j >= row_i, else NaN
 
-        Interpretation
-        --------------
-        At inception (j == i): value ≈ inception_spread_i − fee_i  (locked spread net of cost)
-        Afterwards     (j > i): value tracks how the trade's open inventory is marked to market
-                                as fair_mid evolves — positive drift means the fill is in profit,
-                                negative drift means adverse selection.
+        Identity (full matrix only): ev.sum(axis=1) == augment(df)['mtm_pnl']
         """
         if df.empty:
             return pd.DataFrame()
+        df = df.sort_values('t').reset_index(drop=True)
         inv_delta = df['inventory_after'].diff().fillna(df['inventory_after'].iloc[0]).values
         cash = df['cash_flow'].values
         mids = df['fair_mid'].values
         n = len(df)
-        mat = np.full((n, n), np.nan)
-        for i in range(n):
-            mat[i:, i] = cash[i] + inv_delta[i] * mids[i:]
-        return pd.DataFrame(mat, index=df['t'].values, columns=range(n))
+        cols = list(range(n)) if fill_indices is None else fill_indices
+        mat = np.full((n, len(cols)), np.nan)
+        for col_idx, i in enumerate(cols):
+            mat[i:, col_idx] = cash[i] + inv_delta[i] * mids[i:]
+        return pd.DataFrame(mat, index=df['t'].values, columns=cols)
 
     @staticmethod
     def report(df: pd.DataFrame, current_mid: float) -> dict:
@@ -194,13 +196,74 @@ class PnLTracker:
         }
 
     @staticmethod
+    def _continuous_mtm(df: pd.DataFrame, step_log: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute MtM P&L and its decomposition at every simulation step.
+
+        Forward-fills cumulative cash, fees, and inception spread from fill events
+        into the step log, then computes at each step:
+          continuous_mtm         = cum_cash_ff + inventory × fair_mid
+          continuous_revaluation = continuous_mtm - cum_inception_ff + cum_fees_ff
+
+        Returns DataFrame with columns:
+          t, continuous_mtm, continuous_realized, continuous_inception,
+          continuous_fees, continuous_revaluation
+        """
+        sl = step_log[['t', 'inventory', 'fair_mid']].sort_values('t').reset_index(drop=True)
+        if df.empty:
+            sl['continuous_realized']   = 0.0
+            sl['continuous_inception']  = 0.0
+            sl['continuous_fees']       = 0.0
+            sl['continuous_mtm']        = sl['inventory'] * sl['fair_mid']
+            sl['continuous_revaluation'] = sl['continuous_mtm']
+            return sl[['t', 'continuous_mtm', 'continuous_realized',
+                        'continuous_inception', 'continuous_fees', 'continuous_revaluation']]
+
+        aug = PnLTracker.augment(df)
+
+        # Per-fill inception spread (MM fills only)
+        inception_per_fill = pd.Series(0.0, index=aug.index)
+        sells_idx = aug[(~aug['is_hedge']) & (aug['direction'] == 'sell')].index
+        buys_idx  = aug[(~aug['is_hedge']) & (aug['direction'] == 'buy')].index
+        inception_per_fill.loc[sells_idx] = (
+            (aug.loc[sells_idx, 'price'] - aug.loc[sells_idx, 'fair_mid'])
+            * aug.loc[sells_idx, 'size']
+        )
+        inception_per_fill.loc[buys_idx] = (
+            (aug.loc[buys_idx, 'fair_mid'] - aug.loc[buys_idx, 'price'])
+            * aug.loc[buys_idx, 'size']
+        )
+        aug['cum_inception'] = inception_per_fill.cumsum()
+
+        fill_data = (aug[['t', 'cum_cash', 'cum_fees', 'cum_inception']]
+                     .sort_values('t')
+                     .drop_duplicates('t', keep='last'))
+
+        merged = pd.merge_asof(sl, fill_data, on='t', direction='backward')
+        for col in ('cum_cash', 'cum_fees', 'cum_inception'):
+            merged[col] = merged[col].fillna(0.0)
+
+        merged['continuous_mtm'] = merged['cum_cash'] + merged['inventory'] * merged['fair_mid']
+        merged['continuous_revaluation'] = (
+            merged['continuous_mtm'] - merged['cum_inception'] + merged['cum_fees']
+        )
+        return merged.rename(columns={
+            'cum_cash':      'continuous_realized',
+            'cum_inception': 'continuous_inception',
+            'cum_fees':      'continuous_fees',
+        })[['t', 'continuous_mtm', 'continuous_realized',
+            'continuous_inception', 'continuous_fees', 'continuous_revaluation']]
+
+    @staticmethod
     def plot(df: pd.DataFrame, current_mid: float,
-             capital_K: float | None = None, delta_limit: float = 0.90) -> None:
+             capital_K: float | None = None,
+             delta_limit: float = 0.90,
+             step_log: pd.DataFrame | None = None) -> None:
         """
         4-panel P&L and inventory chart.
 
         Panel 1 — MtM P&L vs realized cash P&L over time
-        Panel 2 — Inventory (EUR) with optional ±delta_limit lines
+        Panel 2 — Inventory (EUR) with ±limit lines for both EUR and USD exposure
         Panel 3 — P&L decomposition: running inception spread vs inventory revaluation
         Panel 4 — Cumulative fees split: maker (A) vs taker hedge (B/C)
 
@@ -208,18 +271,21 @@ class PnLTracker:
         ----------
         df           : Quoter.trade_history DataFrame
         current_mid  : current fair mid price (used for unrealized P&L)
-        capital_K    : total capital — if provided, draws ±delta_limit lines on inventory panel
-        delta_limit  : fraction of capital_K for the inventory limit lines (default 0.90)
+        capital_K    : total capital — if provided, draws limit lines on inventory panel.
+                       EUR limit  = delta_limit × (capital_K / 2)  [red dashed]
+                       USD limit  = delta_limit × (capital_K / 2) / price  [orange dotted]
+        delta_limit  : fraction of half-capital for the inventory limits (default 0.90)
+        step_log     : Controller.step_log DataFrame — if provided, panel 1 shows a
+                       continuous MtM computed at every step instead of the sparse fill-event MtM
         """
         if df.empty:
             print("No trades to plot.")
             return
 
-        aug = PnLTracker.augment(df)
+        aug = PnLTracker.augment(df)  # already sorted by t, index reset to 0..n-1
 
         # Running inception spread per fill (MM fills on A only, hedges contribute 0)
         inception_per_fill = pd.Series(0.0, index=aug.index)
-        mm_idx = aug[~aug['is_hedge']].index
         sells_idx = aug[(~aug['is_hedge']) & (aug['direction'] == 'sell')].index
         buys_idx  = aug[(~aug['is_hedge']) & (aug['direction'] == 'buy')].index
         inception_per_fill.loc[sells_idx] = (
@@ -233,11 +299,18 @@ class PnLTracker:
         aug['cum_inception'] = inception_per_fill.cumsum()
         aug['cum_revaluation'] = aug['mtm_pnl'] - aug['cum_inception'] + aug['cum_fees']
 
-        # Cumulative fees split by venue
-        maker_fees = df[~df['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
-        hedge_fees = df[df['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
+        # Cumulative fees split by venue — use aug (sorted) not the raw df
+        maker_fees = aug[~aug['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
+        hedge_fees = aug[aug['is_hedge']]['fee_cost'].cumsum().reindex(aug.index).ffill().fillna(0)
 
         hedges = aug[aug['is_hedge']]
+
+        # Continuous MtM from step log (if provided)
+        cont = None
+        if step_log is not None and not step_log.empty:
+            cont = PnLTracker._continuous_mtm(df, step_log)
+            stride = max(1, len(cont) // 2000)
+            cont = cont.iloc[::stride].reset_index(drop=True)
 
         fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=True)
         fig.patch.set_facecolor('#111111')
@@ -250,41 +323,95 @@ class PnLTracker:
             ax.spines['left'].set_color('#444444')
             ax.spines['bottom'].set_color('#444444')
 
-        # Panel 1 — MtM P&L vs realized cash
-        axes[0].plot(aug['t'], aug['mtm_pnl'], color='#00ff88', linewidth=0.8, label='MtM P&L')
-        axes[0].plot(aug['t'], aug['cum_cash'], color='#4499ff', linewidth=0.8,
-                     linestyle='--', label='Realized cash')
+        # Panel 1 — MtM P&L (left axis) vs Realized cash (right axis)
+        ax1r = axes[0].twinx()
+        ax1r.set_facecolor('#111111')
+        ax1r.tick_params(colors='#4499ff')
+        ax1r.spines['right'].set_color('#4499ff')
+        ax1r.spines['top'].set_visible(False)
+        ax1r.spines['left'].set_visible(False)
+        ax1r.spines['bottom'].set_visible(False)
+
+        if cont is not None:
+            l1, = axes[0].plot(cont['t'], cont['continuous_mtm'],
+                               color='#00ff88', linewidth=0.8, label='MtM P&L (continuous)')
+            l2, = ax1r.plot(cont['t'], cont['continuous_realized'],
+                            color='#4499ff', linewidth=0.8, linestyle='--', label='Realized cash')
+            if len(hedges):
+                hedge_cont = pd.merge_asof(
+                    hedges[['t']].sort_values('t'),
+                    cont[['t', 'continuous_mtm']].sort_values('t'),
+                    on='t', direction='nearest',
+                )
+                axes[0].scatter(hedge_cont['t'], hedge_cont['continuous_mtm'],
+                                color='#ff4444', s=14, zorder=5, label='Hedge')
+        else:
+            l1, = axes[0].plot(aug['t'], aug['mtm_pnl'],
+                               color='#00ff88', linewidth=0.8, label='MtM P&L')
+            l2, = ax1r.plot(aug['t'], aug['cum_cash'],
+                            color='#4499ff', linewidth=0.8, linestyle='--', label='Realized cash')
+            if len(hedges):
+                axes[0].scatter(hedges['t'], aug.loc[hedges.index, 'mtm_pnl'],
+                                color='#ff4444', s=14, zorder=5, label='Hedge')
         axes[0].axhline(0, color='#444', linewidth=0.6)
-        if len(hedges):
-            axes[0].scatter(hedges['t'], aug.loc[hedges.index, 'mtm_pnl'],
-                            color='#ff4444', s=14, zorder=5, label='Hedge')
         axes[0].set_title('MtM P&L vs Realized Cash P&L (USD)', color='white', fontsize=13)
-        axes[0].set_ylabel('P&L (USD)', color='white')
-        axes[0].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
+        axes[0].set_ylabel('MtM P&L (USD)', color='#00ff88')
+        axes[0].tick_params(axis='y', colors='#00ff88')
+        ax1r.set_ylabel('Realized cash (USD)', color='#4499ff')
+        handles1 = [l1, l2]
+        if len(hedges):
+            from matplotlib.lines import Line2D
+            handles1.append(Line2D([0], [0], marker='o', color='#ff4444', linestyle='None',
+                                   markersize=4, label='Hedge'))
+        axes[0].legend(handles=handles1, facecolor='#222222', edgecolor='#444444',
+                       labelcolor='white', fontsize=9)
 
         # Panel 2 — Inventory
         axes[1].plot(aug['t'], aug['inventory_after'], color='#ff9500', linewidth=0.8)
         axes[1].axhline(0, color='#444', linewidth=0.6)
         if capital_K is not None:
-            lim = capital_K * delta_limit
-            axes[1].axhline(lim,  color='#ff4444', linewidth=0.6, linestyle='--',
-                            label=f'+{delta_limit:.0%} limit')
-            axes[1].axhline(-lim, color='#ff4444', linewidth=0.6, linestyle='--',
-                            label=f'-{delta_limit:.0%} limit')
+            half_K = capital_K * 0.5
+            eur_lim = delta_limit * half_K
+            approx_price = float(aug['fair_mid'].median())
+            usd_lim_in_eur = (delta_limit * half_K) / max(approx_price, 1e-8)
+            axes[1].axhline( eur_lim, color='#ff4444', linewidth=0.7, linestyle='--',
+                            label=f'EUR limit  ±{eur_lim:,.0f}  ({delta_limit:.0%} of K/2)')
+            axes[1].axhline(-eur_lim, color='#ff4444', linewidth=0.7, linestyle='--')
+            axes[1].axhline( usd_lim_in_eur, color='#ff8844', linewidth=0.7, linestyle=':',
+                            label=f'USD limit  ±{delta_limit * half_K:,.0f} USD  (≈ ±{usd_lim_in_eur:,.0f} EUR)')
+            axes[1].axhline(-usd_lim_in_eur, color='#ff8844', linewidth=0.7, linestyle=':')
             axes[1].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
         axes[1].set_title('Inventory (EUR)', color='white', fontsize=13)
         axes[1].set_ylabel('EUR', color='white')
 
-        # Panel 3 — P&L decomposition
-        axes[2].plot(aug['t'], aug['cum_inception'],    color='#ffcc00', linewidth=0.8,
-                     label='Inception spread')
-        axes[2].plot(aug['t'], aug['cum_revaluation'],  color='#cc44ff', linewidth=0.8,
-                     label='Inventory revaluation')
+        # Panel 3 — P&L decomposition: inception spread (left) vs revaluation (right)
+        ax3r = axes[2].twinx()
+        ax3r.set_facecolor('#111111')
+        ax3r.tick_params(colors='#cc44ff')
+        ax3r.spines['right'].set_color('#cc44ff')
+        ax3r.spines['top'].set_visible(False)
+        ax3r.spines['left'].set_visible(False)
+        ax3r.spines['bottom'].set_visible(False)
+
+        if cont is not None:
+            l3, = axes[2].plot(cont['t'], cont['continuous_inception'],
+                               color='#ffcc00', linewidth=0.8, label='Inception spread')
+            l4, = ax3r.plot(cont['t'], cont['continuous_revaluation'],
+                            color='#cc44ff', linewidth=0.8, label='Inventory revaluation')
+        else:
+            l3, = axes[2].plot(aug['t'], aug['cum_inception'],
+                               color='#ffcc00', linewidth=0.8, label='Inception spread')
+            l4, = ax3r.plot(aug['t'], aug['cum_revaluation'],
+                            color='#cc44ff', linewidth=0.8, label='Inventory revaluation')
         axes[2].axhline(0, color='#444', linewidth=0.6)
+        ax3r.axhline(0, color='#444', linewidth=0.3)
         axes[2].set_title('P&L Decomposition: Inception Spread vs Inventory Revaluation (USD)',
                           color='white', fontsize=13)
-        axes[2].set_ylabel('USD', color='white')
-        axes[2].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
+        axes[2].set_ylabel('Inception spread (USD)', color='#ffcc00')
+        axes[2].tick_params(axis='y', colors='#ffcc00')
+        ax3r.set_ylabel('Inventory revaluation (USD)', color='#cc44ff')
+        axes[2].legend(handles=[l3, l4], facecolor='#222222', edgecolor='#444444',
+                       labelcolor='white', fontsize=9)
 
         # Panel 4 — Cumulative fees split
         axes[3].plot(aug['t'], aug['cum_fees'], color='#ff4444', linewidth=0.8, label='Total fees')

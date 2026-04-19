@@ -9,7 +9,7 @@ from ..market_simulator.market import Market
 from ..order_book.order_book_impl import Order_book, Order
 from ..market_maker.quoter import Quoter
 from .pnl_tracker import PnLTracker
-
+from tqdm import tqdm 
 
 class Controller:
     """
@@ -43,8 +43,17 @@ class Controller:
         self.book = book
         self.quoter = quoter
         self.client_flow_fn = client_flow_fn
+        self.number_order = []
+        # Cache dt to avoid two chained attribute lookups per step.
+        self._dt: float = market_B.stock.time_step
 
+        # Pre-allocated numpy arrays (set by simulate(), None until then).
+        self._log_arrays: dict | None = None
+        self._log_ptr: int = 0
+
+        # Fallback for manual step() calls outside simulate().
         self._step_log: List[dict] = []
+
         self._n_fills_prev: int = 0       # track fills-per-step delta
         self._n_quotes_posted: int = 0    # cumulative quotes sent to book
 
@@ -63,25 +72,37 @@ class Controller:
           5. Execute hedge on B/C if delta limit is breached.
           6. Log the step state.
         """
-        dt = self.market_B.stock.time_step
+        dt = getattr(self, '_dt', self.market_B.stock.time_step)
 
         self.book.tick(step)
 
-        quotes, cancels = self.quoter.compute_quotes(step, t, self.book.mm_resting_orders)
+        # Single call: mm_resting_orders returns the live dict reference.
+        # compute_quotes reads it before we cancel/post; the same reference
+        # then reflects the updated state for the bid/ask computation below.
+        resting = self.book.mm_resting_orders
+        quotes, cancels = self.quoter.compute_quotes(step, t, resting)
         self.book.cancel_orders(cancels)
         self.book.post_mm_quotes(quotes)
         self._n_quotes_posted += len(quotes)
 
-        # Market A best bid/ask from resting MM orders
-        resting = self.book.mm_resting_orders
-        bids = [v['price'] for v in resting.values() if v['direction'] == 'buy']
-        asks = [v['price'] for v in resting.values() if v['direction'] == 'sell']
+        # Market A best bid/ask from resting MM orders (single pass).
+        bids = []
+        asks = []
+        for v in resting.values():
+            if v['direction'] == 'buy':
+                bids.append(v['price'])
+            else:
+                asks.append(v['price'])
 
         if bids and asks:
             best_bid_A = max(bids)
             best_ask_A = min(asks)
             mid_A = (best_bid_A + best_ask_A) / 2.0
-            for order in self.client_flow_fn(step, t, mid_A, best_bid_A, best_ask_A, dt):
+            a = self.client_flow_fn(step, t, mid_A, best_bid_A, best_ask_A, dt)
+
+            self.number_order.append(a)
+            for order in a:
+                
                 self.book.route_client_order(order)
             self.quoter.execute_hedge(step, t, mid_A)
         else:
@@ -90,15 +111,53 @@ class Controller:
 
         self._log_step(step, t, best_bid_A, best_ask_A)
 
-    def simulate(self) -> None:
+    def simulate(self, limit: int | None = None) -> None:
         """Run the full simulation from step 0 to n_steps − 1."""
-        dt = self.market_B.stock.time_step
-        for s in range(self.market_B.stock.n_steps):
-            self.step(s, s * dt)
+        n  = limit if limit is not None else self.market_B.stock.n_steps
+        dt = getattr(self, '_dt', self.market_B.stock.time_step)
+
+        # Pre-allocate contiguous numpy arrays for the step log.
+        # Writing by index is ~10× faster than appending dicts to a list.
+        self._log_arrays = {
+            'step':                np.empty(n, dtype=np.int64),
+            't':                   np.empty(n),
+            'bid_A':               np.empty(n),
+            'ask_A':               np.empty(n),
+            'mid_A':               np.empty(n),
+            'bid_B':               np.empty(n),
+            'ask_B':               np.empty(n),
+            'mid_B':               np.empty(n),
+            'bid_C':               np.empty(n),
+            'ask_C':               np.empty(n),
+            'mid_C':               np.empty(n),
+            'fair_mid':            np.empty(n),
+            'inventory':           np.empty(n),
+            'n_mm_resting':        np.empty(n, dtype=np.int64),
+            'fills_this_step':     np.empty(n, dtype=np.int64),
+            'total_quotes_posted': np.empty(n, dtype=np.int64),
+        }
+        self._log_ptr = 0
+        self._n_fills_prev    = 0
+        self._n_quotes_posted = 0
+        self._step_log        = []
+        # Reset quoter fill history so re-running doesn't accumulate stale entries.
+        self.quoter._fill_history.clear()
+        self.quoter._pending_fills.clear()
+        self.quoter._pending_topups.clear()
+
+        if limit is not None:
+            for s in tqdm(range(n)):
+                self.step(s, s * dt)
+        else:
+            for s in tqdm(range(n)):
+                self.step(s, s * dt)
 
     def _log_step(self, step: int, t: float, bid_A: float, ask_A: float) -> None:
         """
-        Append a lightweight state snapshot to the internal step log.
+        Write a lightweight state snapshot for this step.
+
+        Uses pre-allocated numpy arrays when available (fast path set by
+        simulate()); falls back to list-of-dicts for manual step() calls.
 
         Columns logged
         --------------
@@ -116,38 +175,66 @@ class Controller:
         ask_B = float(self.market_B.ask_price[step])
         bid_C = float(self.market_C.bid_price[step])
         ask_C = float(self.market_C.ask_price[step])
+        mid_B = (bid_B + ask_B) * 0.5
+        mid_C = (bid_C + ask_C) * 0.5
 
-        fair_mid = (self.quoter.cfg.weight_B * (bid_B + ask_B) / 2.0
-                    + self.quoter.cfg.weight_C * (bid_C + ask_C) / 2.0)
+        wb = self.quoter.cfg.weight_B
+        wc = self.quoter.cfg.weight_C
+        fair_mid = wb * mid_B + wc * mid_C
 
         n_fills_now = len(self.quoter._fill_history)
         fills_this_step = n_fills_now - self._n_fills_prev
         self._n_fills_prev = n_fills_now
 
-        self._step_log.append({
-            'step': step,
-            't': t,
-            'bid_A': bid_A,
-            'ask_A': ask_A,
-            'mid_A': (bid_A + ask_A) / 2.0 if not np.isnan(bid_A) else np.nan,
-            'bid_B': bid_B,
-            'ask_B': ask_B,
-            'mid_B': (bid_B + ask_B) / 2.0,
-            'bid_C': bid_C,
-            'ask_C': ask_C,
-            'mid_C': (bid_C + ask_C) / 2.0,
-            'fair_mid': fair_mid,
-            'inventory': self.quoter.inventory,
-            'n_mm_resting': len(self.book.mm_resting_orders),
-            'fills_this_step': fills_this_step,
-            'total_quotes_posted': self._n_quotes_posted,
-        })
+        mid_A = (bid_A + ask_A) * 0.5 if not np.isnan(bid_A) else np.nan
+
+        if getattr(self, '_log_arrays', None) is not None:
+            a = self._log_arrays
+            a['step'][step]                = step
+            a['t'][step]                   = t
+            a['bid_A'][step]               = bid_A
+            a['ask_A'][step]               = ask_A
+            a['mid_A'][step]               = mid_A
+            a['bid_B'][step]               = bid_B
+            a['ask_B'][step]               = ask_B
+            a['mid_B'][step]               = mid_B
+            a['bid_C'][step]               = bid_C
+            a['ask_C'][step]               = ask_C
+            a['mid_C'][step]               = mid_C
+            a['fair_mid'][step]            = fair_mid
+            a['inventory'][step]           = self.quoter.inventory
+            a['n_mm_resting'][step]        = len(self.book._mm_resting)
+            a['fills_this_step'][step]     = fills_this_step
+            a['total_quotes_posted'][step] = self._n_quotes_posted
+            self._log_ptr = step + 1
+        else:
+            self._step_log.append({
+                'step': step,
+                't': t,
+                'bid_A': bid_A,
+                'ask_A': ask_A,
+                'mid_A': mid_A,
+                'bid_B': bid_B,
+                'ask_B': ask_B,
+                'mid_B': mid_B,
+                'bid_C': bid_C,
+                'ask_C': ask_C,
+                'mid_C': mid_C,
+                'fair_mid': fair_mid,
+                'inventory': self.quoter.inventory,
+                'n_mm_resting': len(self.book._mm_resting),
+                'fills_this_step': fills_this_step,
+                'total_quotes_posted': self._n_quotes_posted,
+            })
 
     # Properties and report generation
 
     @property
     def step_log(self) -> pd.DataFrame:
         """All logged steps as a DataFrame (one row per simulation step)."""
+        if getattr(self, '_log_arrays', None) is not None:
+            n = self._log_ptr
+            return pd.DataFrame({k: v[:n] for k, v in self._log_arrays.items()})
         return pd.DataFrame(self._step_log)
 
     @property
@@ -156,6 +243,8 @@ class Controller:
         return self.quoter.trade_history
 
     def _current_fair_mid(self) -> float:
+        if getattr(self, '_log_arrays', None) is not None and self._log_ptr > 0:
+            return float(self._log_arrays['fair_mid'][self._log_ptr - 1])
         if self._step_log:
             return self._step_log[-1]['fair_mid']
         df = self.trade_history
@@ -175,33 +264,38 @@ class Controller:
 
     # Backtesting report
 
+    @staticmethod
+    def _ds(log: pd.DataFrame, max_pts: int = 2000) -> pd.DataFrame:
+        """Downsample log to at most max_pts rows for plotting."""
+        stride = max(1, len(log) // max_pts)
+        return log.iloc[::stride]
+
     def plot_market_quotes(self) -> None:
         """
-        Plot the best bid, ask, and mid-price over time for all three markets.
+        Plot prices and spread-in-bps for all three markets.
 
-        Three stacked panels (A, B, C) sharing the time axis.
+        Four stacked panels (A, B, C, Spread bps) sharing the time axis.
         Market A shows the best resting MM quotes; B and C show the simulated
-        reference prices.
+        reference prices. The bottom panel overlays the bid-ask spread in bps
+        for all three markets — useful to spot when quotes are too tight/wide.
         """
         log = self.step_log
         if log.empty:
             print("No log data — run simulate() first.")
             return
 
-        t = log['t']
-        fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+        s = self._ds(log)
+        t = s['t']
+
+        s = s.copy()
+        s['spd_A'] = (s['ask_A'] - s['bid_A']) / s['mid_A'].replace(0, np.nan) * 1e4
+        s['spd_B'] = (s['ask_B'] - s['bid_B']) / s['mid_B'].replace(0, np.nan) * 1e4
+        s['spd_C'] = (s['ask_C'] - s['bid_C']) / s['mid_C'].replace(0, np.nan) * 1e4
+
+        fig, axes = plt.subplots(4, 1, figsize=(14, 14), sharex=True)
         fig.patch.set_facecolor('#111111')
 
-        panels = [
-            ('A (this exchange, MM quotes)',
-             'bid_A', 'ask_A', 'mid_A', '#00ff88', '#ff4444', '#ffffff'),
-            ('B (75% volume, 200 ms latency)',
-             'bid_B', 'ask_B', 'mid_B', '#44bbff', '#ff8844', '#ffcc00'),
-            ('C (25% volume, 170 ms latency)',
-             'bid_C', 'ask_C', 'mid_C', '#aa44ff', '#ff44aa', '#aaffaa'),
-        ]
-
-        for ax, (title, bc, ac, mc, cbid, cask, cmid) in zip(axes, panels):
+        def _style(ax):
             ax.set_facecolor('#111111')
             ax.tick_params(colors='white')
             ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.5, color='#444444')
@@ -210,17 +304,57 @@ class Controller:
             ax.spines['left'].set_color('#444444')
             ax.spines['bottom'].set_color('#444444')
 
-            ax.plot(t, log[mc], color=cmid, linewidth=0.8, label='Mid', zorder=3)
-            ax.plot(t, log[bc], color=cbid, linewidth=0.5, linestyle='--', label='Bid', zorder=2)
-            ax.plot(t, log[ac], color=cask, linewidth=0.5, linestyle='--', label='Ask', zorder=2)
-            ax.fill_between(t, log[bc], log[ac], alpha=0.07, color=cmid)
+        # ── Panel A: absolute price — mid, bid, ask ──
+        ax_A = axes[0]
+        _style(ax_A)
+        ax_A.plot(t, s['mid_A'], color='#ffffff', linewidth=0.8, label='Mid', zorder=3)
+        ax_A.plot(t, s['bid_A'], color='#00ff88', linewidth=0.5, linestyle='--', label='Bid', zorder=2)
+        ax_A.plot(t, s['ask_A'], color='#ff4444', linewidth=0.5, linestyle='--', label='Ask', zorder=2)
+        ax_A.fill_between(t, s['bid_A'], s['ask_A'], alpha=0.07, color='#ffffff')
+        ax_A.set_title('Market A — MM quoted (this exchange)', color='white', fontsize=12)
+        ax_A.set_ylabel('Price', color='white')
+        ax_A.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white',
+                    fontsize=8, loc='upper left')
+
+        # ── Panels B and C: standard absolute price ──
+        ref_panels = [
+            (axes[1], 'B — reference (75% vol, 200 ms)',
+             'bid_B', 'ask_B', 'mid_B', '#44bbff', '#ff8844', '#ffcc00'),
+            (axes[2], 'C — reference (25% vol, 170 ms)',
+             'bid_C', 'ask_C', 'mid_C', '#aa44ff', '#ff44aa', '#aaffaa'),
+        ]
+        for ax, title, bc, ac, mc, cbid, cask, cmid in ref_panels:
+            _style(ax)
+            ax.plot(t, s[mc], color=cmid, linewidth=0.8, label='Mid', zorder=3)
+            ax.plot(t, s[bc], color=cbid, linewidth=0.5, linestyle='--', label='Bid', zorder=2)
+            ax.plot(t, s[ac], color=cask, linewidth=0.5, linestyle='--', label='Ask', zorder=2)
+            ax.fill_between(t, s[bc], s[ac], alpha=0.07, color=cmid)
             ax.set_title(f'Market {title}', color='white', fontsize=12)
             ax.set_ylabel('Price', color='white')
-            ax.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8,
-                      loc='upper left')
+            ax.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white',
+                      fontsize=8, loc='upper left')
 
-        axes[-1].set_xlabel('Time (s)', color='white')
-        plt.suptitle('Bid / Ask / Mid — All Three Markets', color='white', fontsize=14, y=1.01)
+        # Panel 4 — spread in bps
+        ax4 = axes[3]
+        ax4.set_facecolor('#111111')
+        ax4.tick_params(colors='white')
+        ax4.grid(True, linestyle='--', linewidth=0.4, alpha=0.5, color='#444444')
+        ax4.spines['top'].set_visible(False)
+        ax4.spines['right'].set_visible(False)
+        ax4.spines['left'].set_color('#444444')
+        ax4.spines['bottom'].set_color('#444444')
+        ax4.plot(t, s['spd_A'], color='#ffffff', linewidth=0.7, label='A (MM)', zorder=3)
+        ax4.plot(t, s['spd_B'], color='#ffcc00', linewidth=0.7, alpha=0.8, label='B', zorder=2)
+        ax4.plot(t, s['spd_C'], color='#aa44ff', linewidth=0.7, alpha=0.8, label='C', zorder=2)
+        ax4.set_title('Bid-Ask Spread — all markets (bps)', color='white', fontsize=12)
+        ax4.set_ylabel('Spread (bps)', color='white')
+        ax4.set_xlabel('Time (s)', color='white')
+        ax4.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8,
+                   loc='upper right')
+
+        n_days = round(log['t'].iloc[-1] / 86400, 1) if len(log) > 1 else '?'
+        plt.suptitle(f'Bid / Ask / Mid — All Markets  ({n_days} days)',
+                     color='white', fontsize=14, y=1.005)
         plt.tight_layout()
         plt.show()
 
@@ -240,7 +374,8 @@ class Controller:
         mm = df[~df['is_hedge']]
         top = mm.nlargest(min(n, len(mm)), 'size')
 
-        t = log['t']
+        s = self._ds(log)
+        t = s['t']
         fig, ax = plt.subplots(figsize=(14, 6))
         fig.patch.set_facecolor('#111111')
         ax.set_facecolor('#111111')
@@ -251,17 +386,17 @@ class Controller:
         ax.spines['left'].set_color('#444444')
         ax.spines['bottom'].set_color('#444444')
 
-        ax.plot(t, log['mid_A'], color='#ffffff', linewidth=0.8, label='Mid A', zorder=2)
-        ax.plot(t, log['bid_A'], color='#00ff88', linewidth=0.5, linestyle='--',
+        ax.plot(t, s['mid_A'], color='#ffffff', linewidth=0.8, label='Mid A', zorder=2)
+        ax.plot(t, s['bid_A'], color='#00ff88', linewidth=0.5, linestyle='--',
                 label='Bid A', zorder=2)
-        ax.plot(t, log['ask_A'], color='#ff4444', linewidth=0.5, linestyle='--',
+        ax.plot(t, s['ask_A'], color='#ff4444', linewidth=0.5, linestyle='--',
                 label='Ask A', zorder=2)
 
         buys  = top[top['direction'] == 'buy']
         sells = top[top['direction'] == 'sell']
         max_s = top['size'].max() if len(top) else 1.0
 
-        def _ms(s): return 40 + 180 * (s / max_s)
+        def _ms(sz): return 40 + 180 * (sz / max_s)
 
         if len(buys):
             ax.scatter(buys['t'], buys['price'], marker='^', color='#00ff88',
@@ -288,7 +423,8 @@ class Controller:
             print("No log data — run simulate() first.")
             return
 
-        t = log['t']
+        s = self._ds(log)
+        t = s['t']
         fig, ax1 = plt.subplots(figsize=(14, 5))
         fig.patch.set_facecolor('#111111')
         ax1.set_facecolor('#111111')
@@ -299,7 +435,7 @@ class Controller:
         ax1.spines['left'].set_color('#ffcc00')
         ax1.spines['bottom'].set_color('#444444')
 
-        ax1.plot(t, log['fair_mid'], color='#ffcc00', linewidth=0.8, label='EUR/USD fair mid')
+        ax1.plot(t, s['fair_mid'], color='#ffcc00', linewidth=0.8, label='EUR/USD fair mid')
         ax1.set_ylabel('EUR/USD price', color='#ffcc00')
         ax1.tick_params(axis='y', colors='#ffcc00')
 
@@ -311,14 +447,14 @@ class Controller:
         ax2.spines['bottom'].set_visible(False)
         ax2.tick_params(colors='#ff9500')
 
-        ax2.plot(t, log['inventory'], color='#ff9500', linewidth=0.8, label='Inventory (EUR)')
+        ax2.plot(t, s['inventory'], color='#ff9500', linewidth=0.8, label='Inventory (EUR)')
         ax2.axhline(0, color='#555', linewidth=0.6)
 
-        limit = self.quoter.cfg.delta_limit * self.quoter.capital_K
+        half_K = self.quoter.capital_K * 0.5
+        limit = self.quoter.cfg.delta_limit * half_K
         ax2.axhline( limit, color='#ff4444', linewidth=0.7, linestyle='--',
-                    label=f'+{self.quoter.cfg.delta_limit:.0%} limit')
-        ax2.axhline(-limit, color='#ff4444', linewidth=0.7, linestyle='--',
-                    label=f'-{self.quoter.cfg.delta_limit:.0%} limit')
+                    label=f'EUR limit ±{limit:,.0f}  ({self.quoter.cfg.delta_limit:.0%} of K/2)')
+        ax2.axhline(-limit, color='#ff4444', linewidth=0.7, linestyle='--')
         ax2.set_ylabel('Inventory (EUR)', color='#ff9500')
         ax2.tick_params(axis='y', colors='#ff9500')
 
@@ -351,16 +487,24 @@ class Controller:
             print("No MM fills to analyse.")
             return
 
-        ev = PnLTracker.per_trade_mtm_evolution(df)
         t_vals = df['t'].values
 
         # Integer positions of MM fills (column indices in ev)
         mm_pos = [i for i in range(len(df)) if mm_mask.iloc[i]]
 
+        # Cap at 500 fills to avoid building a huge matrix (n×n float64)
+        max_sample = 500
+        rng_sample = np.random.default_rng(0)
+        if len(mm_pos) > max_sample:
+            mm_pos = sorted(rng_sample.choice(mm_pos, size=max_sample, replace=False).tolist())
+
+        # Build the evolution only for the sampled fill indices
+        ev = PnLTracker.per_trade_mtm_evolution(df, fill_indices=mm_pos)
+
         records = []
-        for pos in mm_pos:
+        for col_idx, pos in enumerate(mm_pos):
             t_i = t_vals[pos]
-            col = ev.iloc[:, pos].dropna()
+            col = ev.iloc[:, col_idx].dropna()
             taus = col.index.to_numpy() - t_i
             for tau, val in zip(taus, col.values):
                 records.append({'tau': tau, 'mtm': val})
@@ -396,7 +540,9 @@ class Controller:
         ax.plot(tau_centers, mean, color='#ffcc00', linewidth=1.1, linestyle='--', label='Mean')
         ax.axhline(0, color='#444', linewidth=0.6)
 
-        ax.set_title('Per-trade MtM P&L as a function of time since inception (USD)', color='white', fontsize=13)
+        n_sampled = len(mm_pos)
+        ax.set_title(f'Per-trade MtM P&L since inception — {n_sampled} MM fills sample (USD)',
+                     color='white', fontsize=13)
         ax.set_xlabel('τ  =  time since fill inception (s)', color='white')
         ax.set_ylabel('MtM contribution (USD)', color='white')
         ax.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
@@ -475,6 +621,86 @@ class Controller:
 
         return stats
 
+    def plot_config_summary(self) -> None:
+        """
+        Render a styled dark-theme table summarising all QuoterConfig parameters
+        and the capital allocation used for this simulation run.
+        """
+        cfg = self.quoter.cfg
+        K   = self.quoter.capital_K
+
+        rows = [
+            # ── Capital ──────────────────────────────────────────────────────────
+            ("Capital K",                      f"${K:>14,.0f}"),
+            # ── A-S core ─────────────────────────────────────────────────────────
+            ("── Avellaneda-Stoikov",           ""),
+            ("gamma  (risk aversion)",          f"{cfg.gamma:.4f}"),
+            ("k  (arrival intensity)",          f"{cfg.k:.3f}"),
+            ("omega  (risk horizon)",           f"{cfg.omega:.2e}  →  {1/cfg.omega/3600:.1f} h"),
+            ("alpha_spread",                    f"{cfg.alpha_spread:.2f}"),
+            ("use_asymmetric_delta",            str(cfg.use_asymmetric_delta)),
+            # ── Quote ladder ─────────────────────────────────────────────────────
+            ("── Quote Ladder",                 ""),
+            ("n_levels",                        f"{cfg.n_levels}"),
+            ("Q_base (EUR)",                    f"{cfg.Q_base:,.0f}"),
+            ("beta  (size decay per level)",    f"{cfg.beta:.2f}"),
+            ("tick_size",                       f"{cfg.tick_size:.4f}"),
+            # ── Requote triggers ─────────────────────────────────────────────────
+            ("── Requote Triggers",             ""),
+            ("requote threshold",               f"{cfg.requote_threshold_spread_fraction:.0%} × spread"),
+            ("stale_steps",                     f"{cfg.stale_steps}"),
+            ("inventory_requote_fraction",      f"{cfg.inventory_requote_fraction:.1%}"),
+            # ── Risk management ──────────────────────────────────────────────────
+            ("── Risk Management",              ""),
+            ("delta_limit  (each currency)",    f"{cfg.delta_limit:.0%} of K/2  →  ±{cfg.delta_limit * K * 0.5:,.0f} EUR / USD"),
+            ("hedge_partial_limit",             f"{cfg.hedge_partial_limit:.0%} of K/2  →  ±{cfg.hedge_partial_limit * K * 0.5:,.0f} EUR"),
+            ("emergency_penalty_multiplier",    f"×{cfg.emergency_penalty_multiplier:.1f}"),
+            # ── Fee structure ────────────────────────────────────────────────────
+            ("── Fee Structure",                ""),
+            ("fee A  maker / taker",            f"{cfg.fee_A_maker:.4f}  /  {cfg.fee_A_taker:.4f}"),
+            ("fee B  maker / taker",            f"{cfg.fee_B_maker:.4f}  /  {cfg.fee_B_taker:.4f}"),
+            ("fee C  maker / taker",            f"{cfg.fee_C_maker:.4f}  /  {cfg.fee_C_taker:.4f}"),
+            # ── Latencies ────────────────────────────────────────────────────────
+            ("── Latencies",                    ""),
+            ("latency B / C / HFT (ms)",        (f"{cfg.latency_B_s*1000:.0f}  /  "
+                                                 f"{cfg.latency_C_s*1000:.0f}  /  "
+                                                 f"{cfg.latency_hft_s*1000:.0f}")),
+            # ── Signals ──────────────────────────────────────────────────────────
+            ("── Signals",                      ""),
+            ("vol_window (steps)",              f"{cfg.vol_window}"),
+            ("imbalance_window",                f"{cfg.imbalance_window}"),
+            ("alpha_imbalance",                 f"{cfg.alpha_imbalance:.4f}"),
+            ("imbalance_min_samples",           f"{cfg.imbalance_min_samples}"),
+        ]
+
+        n = len(rows)
+        fig_h = max(6.0, n * 0.38 + 1.2)
+        fig, ax = plt.subplots(figsize=(10, fig_h))
+        fig.patch.set_facecolor('#111111')
+        ax.set_facecolor('#111111')
+        ax.axis('off')
+
+        for i, (label, value) in enumerate(rows):
+            y = 1.0 - (i + 0.7) / n
+            is_section = label.startswith('──')
+            lbl_color = '#888888' if is_section else '#cccccc'
+            val_color = '#00ff88' if (not is_section and value) else '#888888'
+            weight    = 'bold' if is_section else 'normal'
+            ax.text(0.02, y, label, transform=ax.transAxes, fontsize=9.5,
+                    color=lbl_color, va='center', fontfamily='monospace', fontweight=weight)
+            ax.text(0.58, y, value, transform=ax.transAxes, fontsize=9.5,
+                    color=val_color, va='center', fontfamily='monospace')
+            if not is_section:
+                sep_y = y - 0.47 / n
+                ax.axhline(sep_y, color='#2a2a2a', linewidth=0.6,
+                          # transform=ax.get_xaxis_transform(), 
+                           clip_on=False)
+
+        ax.set_title('Quoter — Configuration Summary', color='white', fontsize=13, pad=14,
+                     fontfamily='monospace')
+        plt.tight_layout()
+        plt.show()
+
     def report(self) -> None:
         """
         Generate the full backtesting report.
@@ -495,25 +721,50 @@ class Controller:
         current_mid = self._current_fair_mid()
         rep = PnLTracker.report(df, current_mid)
 
-        print("═" * 62)
-        print("  BACKTESTING REPORT — Phase 1")
-        print("═" * 62)
-        print(f"Total MtM P&L {rep['total_mtm_pnl']:>14.2f}  USD")
-        print(f"Realized P&L  {rep['realized_pnl']:>14.2f}  USD")
-        print(f"Unrealized P&L {rep['unrealized_pnl']:>14.2f}  USD")
-        print(f"Inception spread {rep['inception_spread_pnl']:>14.2f}  USD")
-        print(f"Inv. revaluation {rep['inventory_revaluation_pnl']:>14.2f}  USD")
-        print(f"Total fees {rep['total_fees']:>14.2f}  USD")
-        print(f"Maker fees (A) {rep['mm_maker_fees']:>14.2f}  USD")
-        print(f"Taker fees (B/C) {rep['hedge_taker_fees']:>14.2f}  USD")
-        print(f"Final inventory {rep['final_inventory_eur']:>14.0f}  EUR")
-        print(f"MM fills {rep['n_mm_fills']:>14d}")
-        print(f"Hedge legs {rep['n_hedges']:>14d}")
-        print("═" * 62)
+        log = self.step_log
+        n_days = round(log['t'].iloc[-1] / 86400, 1) if len(log) > 1 else '?'
+        n_steps = len(log)
+        dt = self.market_B.stock.time_step
+        fills_per_day = rep['n_mm_fills'] / max(float(n_days), 1e-9)
 
+        # Spread diagnostics from step log
+        spd_A = (log['ask_A'] - log['bid_A']) / log['mid_A'] * 1e4
+        spd_B = (log['ask_B'] - log['bid_B']) / log['mid_B'] * 1e4
+        spd_C = (log['ask_C'] - log['mid_C']) * 2 / log['mid_C'] * 1e4  # approx
+
+        width = 68
+        print("═" * width)
+        print(f"  BACKTESTING REPORT — Phase 1   ({n_days} days, dt={dt:.1f}s, {n_steps:,} steps)")
+        print("═" * width)
+        print(f"  {'Total MtM P&L':<34}  {rep['total_mtm_pnl']:>+14.2f}  USD")
+        print(f"  {'  Realized cash P&L':<34}  {rep['realized_pnl']:>+14.2f}  USD")
+        print(f"  {'  Unrealized (open inventory × mid)':<34}  {rep['unrealized_pnl']:>+14.2f}  USD")
+        print("─" * width)
+        print(f"  {'Inception spread P&L':<34}  {rep['inception_spread_pnl']:>+14.2f}  USD")
+        print(f"  {'  (spread captured at fill time)':<34}")
+        print(f"  {'Inventory revaluation P&L':<34}  {rep['inventory_revaluation_pnl']:>+14.2f}  USD")
+        print(f"  {'  (mid drift on open EUR position)':<34}")
+        print(f"  {'Total fees paid':<34}  {rep['total_fees']:>14.2f}  USD")
+        print(f"  {'  Maker fees (exchange A)':<34}  {rep['mm_maker_fees']:>14.2f}  USD")
+        print(f"  {'  Taker fees (hedge B/C)':<34}  {rep['hedge_taker_fees']:>14.2f}  USD")
+        print("─" * width)
+        print(f"  {'MM fills':<34}  {rep['n_mm_fills']:>14,}  ({fills_per_day:,.0f}/day)")
+        print(f"  {'Hedge legs':<34}  {rep['n_hedges']:>14,}")
+        print(f"  {'Final inventory':<34}  {rep['final_inventory_eur']:>14,.0f}  EUR")
+        print("─" * width)
+        print(f"  {'Spread A (MM quoted, bps)':<34}  mean={spd_A.mean():.2f}  "
+              f"σ={spd_A.std():.2f}  [{spd_A.min():.2f}, {spd_A.max():.2f}]")
+        print(f"  {'Spread B (reference, bps)':<34}  mean={spd_B.mean():.2f}  "
+              f"σ={spd_B.std():.2f}")
+        print("═" * width)
+
+        self.plot_config_summary()
         self.plot_market_quotes()
         self.plot_top_trades(n=10)
         self.plot_price_inventory()
-        PnLTracker.plot(df, current_mid, capital_K=self.quoter.capital_K, delta_limit=self.quoter.cfg.delta_limit)
+        PnLTracker.plot(df, current_mid,
+                        capital_K=self.quoter.capital_K,
+                        delta_limit=self.quoter.cfg.delta_limit,
+                        step_log=self.step_log)
         self.plot_mtm_percentiles()
         self.fill_rate_analysis(plot=True)
