@@ -99,15 +99,14 @@ class Controller:
             best_ask_A = min(asks)
             mid_A = (best_bid_A + best_ask_A) / 2.0
             a = self.client_flow_fn(step, t, mid_A, best_bid_A, best_ask_A, dt)
-
             self.number_order.append(a)
             for order in a:
-                
                 self.book.route_client_order(order)
-            self.quoter.execute_hedge(step, t, mid_A)
         else:
             best_bid_A = np.nan
             best_ask_A = np.nan
+
+        self.quoter.execute_hedge(step, t)
 
         self._log_step(step, t, best_bid_A, best_ask_A)
 
@@ -360,10 +359,12 @@ class Controller:
 
     def plot_top_trades(self, n: int = 10) -> None:
         """
-        Plot the bid/ask/mid evolution for market A with the top n fills by size marked.
+        Highlight the top n MM fills by size on a Market A price chart.
 
-        Buy fills shown as up-arrows (green), sell fills as down-arrows (red).
-        Marker area scales with fill size.
+        Trades are the centrepiece: large annotated markers (size in EUR,
+        inception spread in bps) on a faint price background. The y-axis is
+        zoomed tightly around the fill price range so the bid/ask spread is
+        visible. Vertical drop-lines connect each marker to the mid_A line.
         """
         log = self.step_log
         df = self.trade_history
@@ -372,42 +373,71 @@ class Controller:
             return
 
         mm = df[~df['is_hedge']]
-        top = mm.nlargest(min(n, len(mm)), 'size')
+        if mm.empty:
+            print("No MM fills.")
+            return
+        top = mm.nlargest(min(n, len(mm)), 'size').copy()
+        top['spread_bps'] = (top['price'] - top['fair_mid']).abs() / top['fair_mid'] * 1e4
 
         s = self._ds(log)
         t = s['t']
-        fig, ax = plt.subplots(figsize=(14, 6))
+
+        fig, ax = plt.subplots(figsize=(14, 7))
         fig.patch.set_facecolor('#111111')
         ax.set_facecolor('#111111')
         ax.tick_params(colors='white')
-        ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.5, color='#444444')
+        ax.grid(True, linestyle='--', linewidth=0.3, alpha=0.4, color='#333333')
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.spines['left'].set_color('#444444')
         ax.spines['bottom'].set_color('#444444')
 
-        ax.plot(t, s['mid_A'], color='#ffffff', linewidth=0.8, label='Mid A', zorder=2)
-        ax.plot(t, s['bid_A'], color='#00ff88', linewidth=0.5, linestyle='--',
-                label='Bid A', zorder=2)
-        ax.plot(t, s['ask_A'], color='#ff4444', linewidth=0.5, linestyle='--',
-                label='Ask A', zorder=2)
+        # Faint price background
+        ax.plot(t, s['mid_A'], color='#555555', linewidth=0.6, zorder=1)
+        ax.plot(t, s['bid_A'], color='#226644', linewidth=0.4, linestyle='--', zorder=1)
+        ax.plot(t, s['ask_A'], color='#662222', linewidth=0.4, linestyle='--', zorder=1)
 
         buys  = top[top['direction'] == 'buy']
         sells = top[top['direction'] == 'sell']
-        max_s = top['size'].max() if len(top) else 1.0
+        max_s = top['size'].max()
 
-        def _ms(sz): return 40 + 180 * (sz / max_s)
+        def _ms(sz): return 120 + 500 * (sz / max_s)
+
+        # Vertical drop-lines from marker to mid_A at that timestamp
+        for _, row in top.iterrows():
+            mid_at_t = np.interp(row['t'], t.values, s['mid_A'].values)
+            color = '#00ff88' if row['direction'] == 'buy' else '#ff4444'
+            ax.plot([row['t'], row['t']], [mid_at_t, row['price']],
+                    color=color, linewidth=0.8, alpha=0.5, zorder=3)
 
         if len(buys):
             ax.scatter(buys['t'], buys['price'], marker='^', color='#00ff88',
-                       s=_ms(buys['size']), zorder=5, label=f'Buy fill (top {n})')
+                       s=_ms(buys['size']), zorder=5, edgecolors='white',
+                       linewidths=0.5, label='Buy fill')
         if len(sells):
             ax.scatter(sells['t'], sells['price'], marker='v', color='#ff4444',
-                       s=_ms(sells['size']), zorder=5, label=f'Sell fill (top {n})')
+                       s=_ms(sells['size']), zorder=5, edgecolors='white',
+                       linewidths=0.5, label='Sell fill')
 
-        ax.set_title(f'Market A — Bid/Ask/Mid with top {n} fills by size',
+        # Annotate each trade: rank, size, spread
+        for rank, (_, row) in enumerate(top.iterrows(), 1):
+            offset = 0.00015 if row['direction'] == 'buy' else -0.00015
+            ax.annotate(
+                f"#{rank}  {row['size']/1000:.0f}k EUR\n{row['spread_bps']:.1f} bps",
+                xy=(row['t'], row['price']),
+                xytext=(row['t'], row['price'] + offset),
+                color='white', fontsize=7, ha='center', va='bottom',
+                zorder=6,
+            )
+
+        # Tight y-axis zoom: price range of fills ± small padding
+        p_min, p_max = top['price'].min(), top['price'].max()
+        pad = max((p_max - p_min) * 0.5, 0.002)
+        ax.set_ylim(p_min - pad, p_max + pad)
+
+        ax.set_title(f'Market A — Top {len(top)} fills by size (marker ∝ EUR size)',
                      color='white', fontsize=13)
-        ax.set_ylabel('Price', color='white')
+        ax.set_ylabel('Price (EUR/USD)', color='white')
         ax.set_xlabel('Time (s)', color='white')
         ax.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
         plt.tight_layout()
@@ -487,26 +517,37 @@ class Controller:
             print("No MM fills to analyse.")
             return
 
-        t_vals = df['t'].values
+        # Dense evaluation grid from step_log (downsampled to ≤5000 points)
+        ds_log = self._ds(self.step_log, max_pts=5000)
+        step_times = ds_log['t'].values
+        step_mids  = ds_log['fair_mid'].values
 
-        # Integer positions of MM fills (column indices in ev)
-        mm_pos = [i for i in range(len(df)) if mm_mask.iloc[i]]
+        # Sort fills by time and extract arrays
+        df_sorted  = df.sort_values('t').reset_index(drop=True)
+        inv_delta  = df_sorted['inventory_after'].diff().fillna(df_sorted['inventory_after'].iloc[0]).values
+        cash_flows = df_sorted['cash_flow'].values
+        fill_times = df_sorted['t'].values
+        mm_mask_s  = (~df_sorted['is_hedge']).values
 
-        # Cap at 500 fills to avoid building a huge matrix (n×n float64)
+        # Integer positions of MM fills in the sorted frame
+        mm_pos = [i for i in range(len(df_sorted)) if mm_mask_s[i]]
+
+        # Sample at most 500 fills to keep record count manageable
         max_sample = 500
         rng_sample = np.random.default_rng(0)
         if len(mm_pos) > max_sample:
             mm_pos = sorted(rng_sample.choice(mm_pos, size=max_sample, replace=False).tolist())
 
-        # Build the evolution only for the sampled fill indices
-        ev = PnLTracker.per_trade_mtm_evolution(df, fill_indices=mm_pos)
-
+        # Evaluate each fill's MtM at every step_log point from inception onward
         records = []
-        for col_idx, pos in enumerate(mm_pos):
-            t_i = t_vals[pos]
-            col = ev.iloc[:, col_idx].dropna()
-            taus = col.index.to_numpy() - t_i
-            for tau, val in zip(taus, col.values):
+        for pos in mm_pos:
+            t_i    = fill_times[pos]
+            cash_i = cash_flows[pos]
+            dinv_i = inv_delta[pos]
+            mask   = step_times >= t_i
+            taus   = step_times[mask] - t_i
+            mtms   = cash_i + dinv_i * step_mids[mask]
+            for tau, val in zip(taus, mtms):
                 records.append({'tau': tau, 'mtm': val})
 
         if not records:
@@ -767,4 +808,23 @@ class Controller:
                         delta_limit=self.quoter.cfg.delta_limit,
                         step_log=self.step_log)
         self.plot_mtm_percentiles()
-        self.fill_rate_analysis(plot=True)
+
+        fr = self.fill_rate_analysis(plot=False)
+        w = 68
+        print("─" * w)
+        print(f"  {'FILL-RATE ANALYSIS'}")
+        print("─" * w)
+        print(f"  {'MM fills':<34}  {fr['total_mm_fills']:>14,}")
+        print(f"  {'Quotes posted':<34}  {fr['total_quotes_posted']:>14,}")
+        print(f"  {'Overall fill rate':<34}  {fr['overall_fill_rate']:>14.4%}")
+        print(f"  {'Avg fill size (EUR)':<34}  {fr['avg_fill_size_eur']:>14,.0f}")
+        print(f"  {'Full fills':<34}  {fr['full_fill_pct']:>14.1%}")
+        print(f"  {'Partial fills':<34}  {fr['partial_fill_pct']:>14.1%}")
+        if not fr['fills_by_level'].empty:
+            print("─" * w)
+            print(f"  {'Level':<10}  {'Fill count':>12}  {'Relative rate':>14}")
+            for lvl in fr['fills_by_level'].index:
+                cnt = fr['fills_by_level'][lvl]
+                rel = fr['fill_rate_by_level'].get(lvl, float('nan'))
+                print(f"  {lvl:<10}  {cnt:>12,.0f}  {rel:>14.3f}")
+        print("═" * w)
