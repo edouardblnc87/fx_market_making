@@ -14,6 +14,8 @@ Usage:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from ..market_maker.quoter import QuoterConfig
 from ..client_flow import config as flow_defaults
 
@@ -71,26 +73,35 @@ class CalibratedConfigBuilder:
         dt = ctrl.market_B.stock.time_step
         capital_K = ctrl.quoter.capital_K
 
-        # --- Quoter-side calibrators ---
+        # --- Quoter-side calibrators (parallelised where dependencies allow) ---
 
         vol_cal = VolatilityCalibrator(mid_prices, dt)
-        vol_params = vol_cal.fit_ewma()
-
         spread_cal = SpreadCalibrator(trade_history, step_log, capital_K)
-        spread_params = spread_cal.fit()
 
-        # GammaOptimizer uses default arrival/size as fixed market assumptions
+        # Round 1: vol EWMA + spread fit are independent → run in parallel.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_vol    = pool.submit(vol_cal.fit_ewma)
+            f_spread = pool.submit(spread_cal.fit)
+            vol_params    = f_vol.result()
+            spread_params = f_spread.result()
+
+        # Round 2: gamma optimisation + vol comparison both need vol_params
+        # (compare() internally re-uses cached ewma) → run in parallel.
         gamma_opt = GammaOptimizer(
             trade_history, step_log, mid_prices, dt,
             _ARRIVAL_DEFAULTS, _SIZE_DEFAULTS, vol_params,
         )
-        gamma_params = gamma_opt.optimize()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_gamma = pool.submit(gamma_opt.optimize)
+            f_comp  = pool.submit(vol_cal.compare)
+            gamma_params   = f_gamma.result()
+            vol_comparison = f_comp.result()
 
         # --- Store diagnostics ---
 
         self.diagnostics = {
             "volatility_ewma": vol_params,
-            "volatility_comparison": vol_cal.compare(),
+            "volatility_comparison": vol_comparison,
             "spread": spread_params,
             "gamma": gamma_params,
         }

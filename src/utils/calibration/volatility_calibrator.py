@@ -35,7 +35,10 @@ class VolatilityCalibrator:
         out-of-sample RMSE of variance prediction.
 
         Returns {"vol_window": int, "rmse": float}
+        Result is cached after first call.
         """
+        if hasattr(self, "_ewma_cache"):
+            return self._ewma_cache
         r = self._log_rets
         n = len(r)
         split = int(n * 0.7)
@@ -69,7 +72,8 @@ class VolatilityCalibrator:
                 best_rmse = rmse
                 best_w = w
 
-        return {"vol_window": best_w, "rmse": best_rmse}
+        self._ewma_cache = {"vol_window": best_w, "rmse": best_rmse}
+        return self._ewma_cache
 
     # ------------------------------------------------------------------
     # GARCH(1,1)
@@ -85,6 +89,14 @@ class VolatilityCalibrator:
         n = len(r)
         if n < 2000:
             return None
+
+        # Subsample to 50K max — GARCH has a pure-Python loop and 51M
+        # rows is overkill; estimates converge well before that.
+        _MAX_GARCH = 50_000
+        if n > _MAX_GARCH:
+            step = n // _MAX_GARCH
+            r = r[::step][:_MAX_GARCH]
+            n = len(r)
 
         r2 = r ** 2
         var_r = float(r2.mean())
