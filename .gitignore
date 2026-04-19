@@ -21,7 +21,7 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
+*.pkl
 # Virtual environments
 .venv
 CLAUDE.md
