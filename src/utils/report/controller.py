@@ -134,6 +134,7 @@ class Controller:
             'n_mm_resting':        np.empty(n, dtype=np.int64),
             'fills_this_step':     np.empty(n, dtype=np.int64),
             'total_quotes_posted': np.empty(n, dtype=np.int64),
+            'requote_rule':        np.empty(n, dtype=np.int8),
         }
         self._log_ptr = 0
         self._n_fills_prev    = 0
@@ -205,6 +206,7 @@ class Controller:
             a['n_mm_resting'][step]        = len(self.book._mm_resting)
             a['fills_this_step'][step]     = fills_this_step
             a['total_quotes_posted'][step] = self._n_quotes_posted
+            a['requote_rule'][step]        = int(getattr(self.quoter, '_last_requote_rule', 0))
             self._log_ptr = step + 1
         else:
             self._step_log.append({
@@ -224,6 +226,7 @@ class Controller:
                 'n_mm_resting': len(self.book._mm_resting),
                 'fills_this_step': fills_this_step,
                 'total_quotes_posted': self._n_quotes_posted,
+                'requote_rule': int(getattr(self.quoter, '_last_requote_rule', 0)),
             })
 
     # Properties and report generation
@@ -689,7 +692,7 @@ class Controller:
             # ── Requote triggers ─────────────────────────────────────────────────
             ("── Requote Triggers",             ""),
             ("requote threshold",               f"{cfg.requote_threshold_spread_fraction:.0%} × spread"),
-            ("stale_steps",                     f"{cfg.stale_steps}"),
+            ("stale_s",                          f"{cfg.stale_s:.1f} s"),
             ("inventory_requote_fraction",      f"{cfg.inventory_requote_fraction:.1%}"),
             # ── Risk management ──────────────────────────────────────────────────
             ("── Risk Management",              ""),
@@ -708,7 +711,7 @@ class Controller:
                                                  f"{cfg.latency_hft_s*1000:.0f}")),
             # ── Signals ──────────────────────────────────────────────────────────
             ("── Signals",                      ""),
-            ("vol_window (steps)",              f"{cfg.vol_window}"),
+            ("vol_window_s",                    f"{cfg.vol_window_s:.1f} s"),
             ("imbalance_window",                f"{cfg.imbalance_window}"),
             ("alpha_imbalance",                 f"{cfg.alpha_imbalance:.4f}"),
             ("imbalance_min_samples",           f"{cfg.imbalance_min_samples}"),
@@ -771,7 +774,7 @@ class Controller:
         # Spread diagnostics from step log
         spd_A = (log['ask_A'] - log['bid_A']) / log['mid_A'] * 1e4
         spd_B = (log['ask_B'] - log['bid_B']) / log['mid_B'] * 1e4
-        spd_C = (log['ask_C'] - log['mid_C']) * 2 / log['mid_C'] * 1e4  # approx
+        spd_C = (log['ask_C'] - log['bid_C']) / log['mid_C'] * 1e4
 
         width = 68
         print("═" * width)
@@ -797,6 +800,8 @@ class Controller:
               f"σ={spd_A.std():.2f}  [{spd_A.min():.2f}, {spd_A.max():.2f}]")
         print(f"  {'Spread B (reference, bps)':<34}  mean={spd_B.mean():.2f}  "
               f"σ={spd_B.std():.2f}")
+        print(f"  {'Spread C (reference, bps)':<34}  mean={spd_C.mean():.2f}  "
+              f"σ={spd_C.std():.2f}")
         print("═" * width)
 
         self.plot_config_summary()
