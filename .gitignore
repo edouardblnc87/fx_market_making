@@ -23,41 +23,6 @@ build/
 .ruff_cache/
 
 # Virtual environments
-.venv/
-venv/
-env/
-
-# uv
-.uv/
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb_checkpoints
-
-# Environment variables
-.env
-.env.*
-!.env.example
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*.pkl
-# OS
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Logs
-*.log
-logs/
-
-# Data / large files
-*.csv
-*.parquet
-*.feather
-
-*.h5
-*.hdf5
+.venv
+CLAUDE.md
+.claude

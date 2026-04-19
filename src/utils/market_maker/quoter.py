@@ -19,8 +19,8 @@ FX_SESSION_RESETS_UTC = [8 * 3600, 16 * 3600]
 # London/NY overlap is the deepest and most liquid; Tokyo is comparatively thin. A single k calibrated on one session misprices fill probability on others.
 # These multipliers are applied to cfg.k at quote time via _session_k().
 _SESSION_K_MULTIPLIERS = {
-    "tokyo":   1,   # thinner book, orders less sensitive to distance → lower k
-    "london":  1,   # deepest session, strong price sensitivity → higher k
+    "tokyo":   0.75,   # thinner book, orders less sensitive to distance → lower k
+    "london":  1.25,   # deepest session, strong price sensitivity → higher k
     "newyork": 1.00,   # reference calibration
 }
 
@@ -486,7 +486,7 @@ class Quoter:
     def fill_cost(self, size: float, fair_mid: float) -> float:
         return abs(size) * self.cfg.fee_A_maker * fair_mid
 
-    def execute_hedge(self, step: int, t: float, fair_mid: float) -> bool:
+    def execute_hedge(self, step: int, t: float) -> bool:
         """
         Execute the optimal hedge across B and C when inventory breaches delta_limit,
         or at EOD (every eod_flat_interval seconds) regardless of inventory size.
@@ -505,6 +505,13 @@ class Quoter:
                                     so compute_quotes applies an extreme penalty to force
                                     asymmetric quotes on A toward inventory reduction.
         """
+        # Use B/C cached fair mid (set by compute_quotes this step) — more accurate
+        # than mid_A for valuing the USD notional of our EUR inventory.
+        fair_mid = (
+            max(self._cache_bid_B, self._cache_bid_C) +
+            min(self._cache_ask_B, self._cache_ask_C)
+        ) / 2.0
+
         # EOD flat: force inventory to zero each time we cross a day boundary.
         force_flat = False
         if self.cfg.eod_flat_interval > 0.0 and abs(self.inventory) > 0.0:
