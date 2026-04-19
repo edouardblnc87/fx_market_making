@@ -256,13 +256,14 @@ class PnLTracker:
 
     @staticmethod
     def plot(df: pd.DataFrame, current_mid: float,
-             capital_K: float | None = None, delta_limit: float = 0.90,
+             capital_K: float | None = None,
+             delta_limit: float = 0.90,
              step_log: pd.DataFrame | None = None) -> None:
         """
         4-panel P&L and inventory chart.
 
         Panel 1 — MtM P&L vs realized cash P&L over time
-        Panel 2 — Inventory (EUR) with optional ±delta_limit lines
+        Panel 2 — Inventory (EUR) with ±limit lines for both EUR and USD exposure
         Panel 3 — P&L decomposition: running inception spread vs inventory revaluation
         Panel 4 — Cumulative fees split: maker (A) vs taker hedge (B/C)
 
@@ -270,8 +271,10 @@ class PnLTracker:
         ----------
         df           : Quoter.trade_history DataFrame
         current_mid  : current fair mid price (used for unrealized P&L)
-        capital_K    : total capital — if provided, draws ±delta_limit lines on inventory panel
-        delta_limit  : fraction of capital_K for the inventory limit lines (default 0.90)
+        capital_K    : total capital — if provided, draws limit lines on inventory panel.
+                       EUR limit  = delta_limit × (capital_K / 2)  [red dashed]
+                       USD limit  = delta_limit × (capital_K / 2) / price  [orange dotted]
+        delta_limit  : fraction of half-capital for the inventory limits (default 0.90)
         step_log     : Controller.step_log DataFrame — if provided, panel 1 shows a
                        continuous MtM computed at every step instead of the sparse fill-event MtM
         """
@@ -320,12 +323,20 @@ class PnLTracker:
             ax.spines['left'].set_color('#444444')
             ax.spines['bottom'].set_color('#444444')
 
-        # Panel 1 — MtM P&L vs realized cash
+        # Panel 1 — MtM P&L (left axis) vs Realized cash (right axis)
+        ax1r = axes[0].twinx()
+        ax1r.set_facecolor('#111111')
+        ax1r.tick_params(colors='#4499ff')
+        ax1r.spines['right'].set_color('#4499ff')
+        ax1r.spines['top'].set_visible(False)
+        ax1r.spines['left'].set_visible(False)
+        ax1r.spines['bottom'].set_visible(False)
+
         if cont is not None:
-            axes[0].plot(cont['t'], cont['continuous_mtm'],
-                         color='#00ff88', linewidth=0.8, label='MtM P&L (continuous)')
-            axes[0].plot(cont['t'], cont['continuous_realized'],
-                         color='#4499ff', linewidth=0.8, linestyle='--', label='Realized cash')
+            l1, = axes[0].plot(cont['t'], cont['continuous_mtm'],
+                               color='#00ff88', linewidth=0.8, label='MtM P&L (continuous)')
+            l2, = ax1r.plot(cont['t'], cont['continuous_realized'],
+                            color='#4499ff', linewidth=0.8, linestyle='--', label='Realized cash')
             if len(hedges):
                 hedge_cont = pd.merge_asof(
                     hedges[['t']].sort_values('t'),
@@ -335,46 +346,72 @@ class PnLTracker:
                 axes[0].scatter(hedge_cont['t'], hedge_cont['continuous_mtm'],
                                 color='#ff4444', s=14, zorder=5, label='Hedge')
         else:
-            axes[0].plot(aug['t'], aug['mtm_pnl'], color='#00ff88', linewidth=0.8, label='MtM P&L')
-            axes[0].plot(aug['t'], aug['cum_cash'], color='#4499ff', linewidth=0.8,
-                         linestyle='--', label='Realized cash')
+            l1, = axes[0].plot(aug['t'], aug['mtm_pnl'],
+                               color='#00ff88', linewidth=0.8, label='MtM P&L')
+            l2, = ax1r.plot(aug['t'], aug['cum_cash'],
+                            color='#4499ff', linewidth=0.8, linestyle='--', label='Realized cash')
             if len(hedges):
                 axes[0].scatter(hedges['t'], aug.loc[hedges.index, 'mtm_pnl'],
                                 color='#ff4444', s=14, zorder=5, label='Hedge')
         axes[0].axhline(0, color='#444', linewidth=0.6)
         axes[0].set_title('MtM P&L vs Realized Cash P&L (USD)', color='white', fontsize=13)
-        axes[0].set_ylabel('P&L (USD)', color='white')
-        axes[0].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
+        axes[0].set_ylabel('MtM P&L (USD)', color='#00ff88')
+        axes[0].tick_params(axis='y', colors='#00ff88')
+        ax1r.set_ylabel('Realized cash (USD)', color='#4499ff')
+        handles1 = [l1, l2]
+        if len(hedges):
+            from matplotlib.lines import Line2D
+            handles1.append(Line2D([0], [0], marker='o', color='#ff4444', linestyle='None',
+                                   markersize=4, label='Hedge'))
+        axes[0].legend(handles=handles1, facecolor='#222222', edgecolor='#444444',
+                       labelcolor='white', fontsize=9)
 
         # Panel 2 — Inventory
         axes[1].plot(aug['t'], aug['inventory_after'], color='#ff9500', linewidth=0.8)
         axes[1].axhline(0, color='#444', linewidth=0.6)
         if capital_K is not None:
-            lim = capital_K * delta_limit
-            axes[1].axhline(lim,  color='#ff4444', linewidth=0.6, linestyle='--',
-                            label=f'+{delta_limit:.0%} limit')
-            axes[1].axhline(-lim, color='#ff4444', linewidth=0.6, linestyle='--',
-                            label=f'-{delta_limit:.0%} limit')
+            half_K = capital_K * 0.5
+            eur_lim = delta_limit * half_K
+            approx_price = float(aug['fair_mid'].median())
+            usd_lim_in_eur = (delta_limit * half_K) / max(approx_price, 1e-8)
+            axes[1].axhline( eur_lim, color='#ff4444', linewidth=0.7, linestyle='--',
+                            label=f'EUR limit  ±{eur_lim:,.0f}  ({delta_limit:.0%} of K/2)')
+            axes[1].axhline(-eur_lim, color='#ff4444', linewidth=0.7, linestyle='--')
+            axes[1].axhline( usd_lim_in_eur, color='#ff8844', linewidth=0.7, linestyle=':',
+                            label=f'USD limit  ±{delta_limit * half_K:,.0f} USD  (≈ ±{usd_lim_in_eur:,.0f} EUR)')
+            axes[1].axhline(-usd_lim_in_eur, color='#ff8844', linewidth=0.7, linestyle=':')
             axes[1].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
         axes[1].set_title('Inventory (EUR)', color='white', fontsize=13)
         axes[1].set_ylabel('EUR', color='white')
 
-        # Panel 3 — P&L decomposition (use continuous data when step_log is available)
+        # Panel 3 — P&L decomposition: inception spread (left) vs revaluation (right)
+        ax3r = axes[2].twinx()
+        ax3r.set_facecolor('#111111')
+        ax3r.tick_params(colors='#cc44ff')
+        ax3r.spines['right'].set_color('#cc44ff')
+        ax3r.spines['top'].set_visible(False)
+        ax3r.spines['left'].set_visible(False)
+        ax3r.spines['bottom'].set_visible(False)
+
         if cont is not None:
-            axes[2].plot(cont['t'], cont['continuous_inception'],   color='#ffcc00', linewidth=0.8,
-                         label='Inception spread')
-            axes[2].plot(cont['t'], cont['continuous_revaluation'], color='#cc44ff', linewidth=0.8,
-                         label='Inventory revaluation')
+            l3, = axes[2].plot(cont['t'], cont['continuous_inception'],
+                               color='#ffcc00', linewidth=0.8, label='Inception spread')
+            l4, = ax3r.plot(cont['t'], cont['continuous_revaluation'],
+                            color='#cc44ff', linewidth=0.8, label='Inventory revaluation')
         else:
-            axes[2].plot(aug['t'], aug['cum_inception'],   color='#ffcc00', linewidth=0.8,
-                         label='Inception spread')
-            axes[2].plot(aug['t'], aug['cum_revaluation'], color='#cc44ff', linewidth=0.8,
-                         label='Inventory revaluation')
+            l3, = axes[2].plot(aug['t'], aug['cum_inception'],
+                               color='#ffcc00', linewidth=0.8, label='Inception spread')
+            l4, = ax3r.plot(aug['t'], aug['cum_revaluation'],
+                            color='#cc44ff', linewidth=0.8, label='Inventory revaluation')
         axes[2].axhline(0, color='#444', linewidth=0.6)
+        ax3r.axhline(0, color='#444', linewidth=0.3)
         axes[2].set_title('P&L Decomposition: Inception Spread vs Inventory Revaluation (USD)',
                           color='white', fontsize=13)
-        axes[2].set_ylabel('USD', color='white')
-        axes[2].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
+        axes[2].set_ylabel('Inception spread (USD)', color='#ffcc00')
+        axes[2].tick_params(axis='y', colors='#ffcc00')
+        ax3r.set_ylabel('Inventory revaluation (USD)', color='#cc44ff')
+        axes[2].legend(handles=[l3, l4], facecolor='#222222', edgecolor='#444444',
+                       labelcolor='white', fontsize=9)
 
         # Panel 4 — Cumulative fees split
         axes[3].plot(aug['t'], aug['cum_fees'], color='#ff4444', linewidth=0.8, label='Total fees')

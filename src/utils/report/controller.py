@@ -149,7 +149,7 @@ class Controller:
             for s in tqdm(range(n)):
                 self.step(s, s * dt)
         else:
-            for s in range(n):
+            for s in tqdm(range(n)):
                 self.step(s, s * dt)
 
     def _log_step(self, step: int, t: float, bid_A: float, ask_A: float) -> None:
@@ -450,11 +450,11 @@ class Controller:
         ax2.plot(t, s['inventory'], color='#ff9500', linewidth=0.8, label='Inventory (EUR)')
         ax2.axhline(0, color='#555', linewidth=0.6)
 
-        limit = self.quoter.cfg.delta_limit * self.quoter.capital_K
+        half_K = self.quoter.capital_K * 0.5
+        limit = self.quoter.cfg.delta_limit * half_K
         ax2.axhline( limit, color='#ff4444', linewidth=0.7, linestyle='--',
-                    label=f'+{self.quoter.cfg.delta_limit:.0%} limit')
-        ax2.axhline(-limit, color='#ff4444', linewidth=0.7, linestyle='--',
-                    label=f'-{self.quoter.cfg.delta_limit:.0%} limit')
+                    label=f'EUR limit ±{limit:,.0f}  ({self.quoter.cfg.delta_limit:.0%} of K/2)')
+        ax2.axhline(-limit, color='#ff4444', linewidth=0.7, linestyle='--')
         ax2.set_ylabel('Inventory (EUR)', color='#ff9500')
         ax2.tick_params(axis='y', colors='#ff9500')
 
@@ -621,6 +621,86 @@ class Controller:
 
         return stats
 
+    def plot_config_summary(self) -> None:
+        """
+        Render a styled dark-theme table summarising all QuoterConfig parameters
+        and the capital allocation used for this simulation run.
+        """
+        cfg = self.quoter.cfg
+        K   = self.quoter.capital_K
+
+        rows = [
+            # ── Capital ──────────────────────────────────────────────────────────
+            ("Capital K",                      f"${K:>14,.0f}"),
+            # ── A-S core ─────────────────────────────────────────────────────────
+            ("── Avellaneda-Stoikov",           ""),
+            ("gamma  (risk aversion)",          f"{cfg.gamma:.4f}"),
+            ("k  (arrival intensity)",          f"{cfg.k:.3f}"),
+            ("omega  (risk horizon)",           f"{cfg.omega:.2e}  →  {1/cfg.omega/3600:.1f} h"),
+            ("alpha_spread",                    f"{cfg.alpha_spread:.2f}"),
+            ("use_asymmetric_delta",            str(cfg.use_asymmetric_delta)),
+            # ── Quote ladder ─────────────────────────────────────────────────────
+            ("── Quote Ladder",                 ""),
+            ("n_levels",                        f"{cfg.n_levels}"),
+            ("Q_base (EUR)",                    f"{cfg.Q_base:,.0f}"),
+            ("beta  (size decay per level)",    f"{cfg.beta:.2f}"),
+            ("tick_size",                       f"{cfg.tick_size:.4f}"),
+            # ── Requote triggers ─────────────────────────────────────────────────
+            ("── Requote Triggers",             ""),
+            ("requote threshold",               f"{cfg.requote_threshold_spread_fraction:.0%} × spread"),
+            ("stale_steps",                     f"{cfg.stale_steps}"),
+            ("inventory_requote_fraction",      f"{cfg.inventory_requote_fraction:.1%}"),
+            # ── Risk management ──────────────────────────────────────────────────
+            ("── Risk Management",              ""),
+            ("delta_limit  (each currency)",    f"{cfg.delta_limit:.0%} of K/2  →  ±{cfg.delta_limit * K * 0.5:,.0f} EUR / USD"),
+            ("hedge_partial_limit",             f"{cfg.hedge_partial_limit:.0%} of K/2  →  ±{cfg.hedge_partial_limit * K * 0.5:,.0f} EUR"),
+            ("emergency_penalty_multiplier",    f"×{cfg.emergency_penalty_multiplier:.1f}"),
+            # ── Fee structure ────────────────────────────────────────────────────
+            ("── Fee Structure",                ""),
+            ("fee A  maker / taker",            f"{cfg.fee_A_maker:.4f}  /  {cfg.fee_A_taker:.4f}"),
+            ("fee B  maker / taker",            f"{cfg.fee_B_maker:.4f}  /  {cfg.fee_B_taker:.4f}"),
+            ("fee C  maker / taker",            f"{cfg.fee_C_maker:.4f}  /  {cfg.fee_C_taker:.4f}"),
+            # ── Latencies ────────────────────────────────────────────────────────
+            ("── Latencies",                    ""),
+            ("latency B / C / HFT (ms)",        (f"{cfg.latency_B_s*1000:.0f}  /  "
+                                                 f"{cfg.latency_C_s*1000:.0f}  /  "
+                                                 f"{cfg.latency_hft_s*1000:.0f}")),
+            # ── Signals ──────────────────────────────────────────────────────────
+            ("── Signals",                      ""),
+            ("vol_window (steps)",              f"{cfg.vol_window}"),
+            ("imbalance_window",                f"{cfg.imbalance_window}"),
+            ("alpha_imbalance",                 f"{cfg.alpha_imbalance:.4f}"),
+            ("imbalance_min_samples",           f"{cfg.imbalance_min_samples}"),
+        ]
+
+        n = len(rows)
+        fig_h = max(6.0, n * 0.38 + 1.2)
+        fig, ax = plt.subplots(figsize=(10, fig_h))
+        fig.patch.set_facecolor('#111111')
+        ax.set_facecolor('#111111')
+        ax.axis('off')
+
+        for i, (label, value) in enumerate(rows):
+            y = 1.0 - (i + 0.7) / n
+            is_section = label.startswith('──')
+            lbl_color = '#888888' if is_section else '#cccccc'
+            val_color = '#00ff88' if (not is_section and value) else '#888888'
+            weight    = 'bold' if is_section else 'normal'
+            ax.text(0.02, y, label, transform=ax.transAxes, fontsize=9.5,
+                    color=lbl_color, va='center', fontfamily='monospace', fontweight=weight)
+            ax.text(0.58, y, value, transform=ax.transAxes, fontsize=9.5,
+                    color=val_color, va='center', fontfamily='monospace')
+            if not is_section:
+                sep_y = y - 0.47 / n
+                ax.axhline(sep_y, color='#2a2a2a', linewidth=0.6,
+                          # transform=ax.get_xaxis_transform(), 
+                           clip_on=False)
+
+        ax.set_title('Quoter — Configuration Summary', color='white', fontsize=13, pad=14,
+                     fontfamily='monospace')
+        plt.tight_layout()
+        plt.show()
+
     def report(self) -> None:
         """
         Generate the full backtesting report.
@@ -678,10 +758,13 @@ class Controller:
               f"σ={spd_B.std():.2f}")
         print("═" * width)
 
+        self.plot_config_summary()
         self.plot_market_quotes()
         self.plot_top_trades(n=10)
         self.plot_price_inventory()
-        PnLTracker.plot(df, current_mid, capital_K=self.quoter.capital_K,
-                        delta_limit=self.quoter.cfg.delta_limit, step_log=self.step_log)
+        PnLTracker.plot(df, current_mid,
+                        capital_K=self.quoter.capital_K,
+                        delta_limit=self.quoter.cfg.delta_limit,
+                        step_log=self.step_log)
         self.plot_mtm_percentiles()
         self.fill_rate_analysis(plot=True)
