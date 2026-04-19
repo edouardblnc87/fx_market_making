@@ -19,8 +19,8 @@ FX_SESSION_RESETS_UTC = [8 * 3600, 16 * 3600]
 # London/NY overlap is the deepest and most liquid; Tokyo is comparatively thin. A single k calibrated on one session misprices fill probability on others.
 # These multipliers are applied to cfg.k at quote time via _session_k().
 _SESSION_K_MULTIPLIERS = {
-    "tokyo":   0.75,   # thinner book, orders less sensitive to distance → lower k
-    "london":  1.25,   # deepest session, strong price sensitivity → higher k
+    "tokyo":   1.00, #0.75,   # thinner book, orders less sensitive to distance → lower k
+    "london":  1.00, #1.25,   # deepest session, strong price sensitivity → higher k
     "newyork": 1.00,   # reference calibration
 }
 
@@ -47,8 +47,8 @@ class QuoterConfig:
 
     # Requote triggers
     requote_threshold_spread_fraction: float = 0.25
-    stale_steps: int = 300
-    stale_inventory_fraction: float = 0.5
+    stale_s: float = 3.0            # seconds before Priority 6 fires (was stale_steps)
+    stale_tight_fraction: float = 0.88  # reprice stale orders at 70% of normal half_spread
     # Inventory-change trigger: force a requote when |inventory| has moved by more than this fraction of capital_K since the last reprice, even if prices are flat.
     inventory_requote_fraction: float = 0.05
 
@@ -65,9 +65,8 @@ class QuoterConfig:
     latency_hft_s: float = 0.050
 
     # Volatility estimation
-    vol_window: int = 6000
-    # Minimum number of steps before switching from the parametric fallback to realized vol.
-    vol_min_steps: int = 200
+    vol_window_s: float = 60.0      # EWMA lookback in seconds (was vol_window steps)
+    vol_min_s:    float = 2.0       # warm-up before switching to realized vol (was vol_min_steps)
 
     # Order flow imbalance signal (Cartea & Jaimungal)
     imbalance_window: int = 50
@@ -139,6 +138,9 @@ class Quoter:
         # Flag: True until compute_quotes() has been called at least once.
         self._first_quote: bool = True
 
+        # Last requote rule that fired: 0=nothing, 1-6=priority
+        self._last_requote_rule: int = 0
+
         # True when a hedge was attempted but available depth on B+C wasn't enough to bring inventory below hedge_partial_limit. 
         self._hedge_emergency: bool = False  # Compute_quotes will apply an emergency penalty. Multiplier to force extreme quote skew on A until inventory recovers.
 
@@ -158,6 +160,10 @@ class Quoter:
 
         dt = market_B.stock.time_step
         self._dt: float = dt
+        # Convert second-based config windows to step counts once at init
+        self._vol_window_steps: int = max(1, round(self.cfg.vol_window_s / dt))
+        self._vol_min_steps:    int = max(1, round(self.cfg.vol_min_s    / dt))
+        self._stale_steps:      int = max(1, round(self.cfg.stale_s      / dt))
         self._lag_B: int = max(1, round(self.cfg.latency_B_s / dt))
         self._lag_C: int = max(1, round(self.cfg.latency_C_s / dt))
 
@@ -357,6 +363,7 @@ class Quoter:
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
+            self._last_requote_rule = 1
             return self._build_ladder(best_bid, best_ask, inventory_ratio), []
 
         # Priority 2: FX session boundary — cancel everything, start fresh
@@ -367,6 +374,7 @@ class Quoter:
             self._prev_inventory = self.inventory
             self._flow_history.clear()
             cancel_ids = list(resting_orders.keys())
+            self._last_requote_rule = 2
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
         # Priority 3: best price has drifted beyond threshold — cancel all and reprice
@@ -379,6 +387,7 @@ class Quoter:
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
+            self._last_requote_rule = 3
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
         # Priority 4: full fills + partial top-ups. Handle both in one pass
@@ -387,6 +396,7 @@ class Quoter:
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
+            self._last_requote_rule = 4
             return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, filled_slots) + topup_orders, []
 
         # Priority 5: inventory has drifted enough since the last reprice to invalidate the current skew, even if market prices have not moved (silent accumulation).
@@ -396,24 +406,26 @@ class Quoter:
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
+            self._last_requote_rule = 5
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
-        # Priority 6: stale orders with stressed inventory. Cancel and reprice those slots
-        inventory_stressed = abs(inventory_ratio) > self.cfg.stale_inventory_fraction
-        if inventory_stressed:
-            cancel_ids: List[str] = []
-            cancelled_slots: Set[Tuple[str, int]] = set()
-            for oid, info in resting_orders.items():
-                if info["age"] > self.cfg.stale_steps:
-                    cancel_ids.append(oid)
-                    cancelled_slots.add((info["direction"], info["level"]))
-            if cancel_ids:
-                self._prev_best_bid = best_bid
-                self._prev_best_ask = best_ask
-                self._prev_inventory = self.inventory
-                return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, cancelled_slots), cancel_ids
+        # Priority 6: stale orders — reprice aggressively regardless of inventory
+        stale_slots: Set[Tuple[str, int]] = set()
+        cancel_ids_6: List[str] = []
+        for oid, info in resting_orders.items():
+            if info["age"] > self._stale_steps:
+                cancel_ids_6.append(oid)
+                stale_slots.add((info["direction"], info["level"]))
+        if stale_slots:
+            self._prev_best_bid = best_bid
+            self._prev_best_ask = best_ask
+            self._prev_inventory = self.inventory
+            self._last_requote_rule = 6
+            return self._build_ladder_tight(best_bid, best_ask, inventory_ratio,
+                                            self.cfg.stale_tight_fraction), cancel_ids_6
 
         # Nothing triggered. Resting orders are still valid, do nothing
+        self._last_requote_rule = 0
         return [], []
 
 
@@ -689,6 +701,17 @@ class Quoter:
             orders.append(Order(generate_order_id(), "sell", ask_price, ask_size, "limit_order", "market_maker", i))
         return orders
 
+    def _build_ladder_tight(self, best_bid: float, best_ask: float, inventory_ratio: float, spread_multiplier: float) -> List[Order]:
+        """Full ladder repriced with a tighter spread (spread_multiplier < 1.0).
+        Squeezes the bid/ask around the current mid by spread_multiplier before building."""
+        mid = (best_bid + best_ask) * 0.5
+        half = (best_ask - best_bid) * 0.5 * spread_multiplier
+        tight_bid = self._snap_to_tick(mid - half)
+        tight_ask = self._snap_to_tick(mid + half)
+        if tight_bid >= tight_ask:
+            tight_ask = tight_bid + self.cfg.tick_size
+        return self._build_ladder(tight_bid, tight_ask, inventory_ratio)
+
     def _build_partial_ladder(self, best_bid: float, best_ask: float, inventory_ratio: float, slots: Set[Tuple[str, int]]) -> List[Order]:
         """
         Surgical rebuild: only emit quotes for the exact (direction, level) slots cancelled.
@@ -775,7 +798,7 @@ class Quoter:
         if p0 <= 0.0:
             return
         r = np.log(p1 / p0)
-        alpha = 2.0 / (self.cfg.vol_window + 1)
+        alpha = 2.0 / (self._vol_window_steps + 1)
         if self._ewma_var is None:
             self._ewma_var = r * r
         else:
@@ -787,7 +810,7 @@ class Quoter:
         Uses the incremental EWMA maintained by _update_ewma_vol().
         Falls back to the parametric vol below vol_min_steps.
         """
-        if step < self.cfg.vol_min_steps or self._ewma_var is None:
+        if step < self._vol_min_steps or self._ewma_var is None:
             return self.market_B.stock.vol
         dt_frac = getattr(self, '_dt_frac', self.market_B.stock.time_step / TRADING_SECONDS_PER_YEAR)
         return max(np.sqrt(self._ewma_var / dt_frac), 1e-6)
