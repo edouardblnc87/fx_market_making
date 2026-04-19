@@ -243,6 +243,8 @@ class Controller:
         return self.quoter.trade_history
 
     def _current_fair_mid(self) -> float:
+        if getattr(self, '_log_arrays', None) is not None and self._log_ptr > 0:
+            return float(self._log_arrays['fair_mid'][self._log_ptr - 1])
         if self._step_log:
             return self._step_log[-1]['fair_mid']
         df = self.trade_history
@@ -679,6 +681,7 @@ class Controller:
         self.plot_market_quotes()
         self.plot_top_trades(n=10)
         self.plot_price_inventory()
-        PnLTracker.plot(df, current_mid, capital_K=self.quoter.capital_K, delta_limit=self.quoter.cfg.delta_limit)
+        PnLTracker.plot(df, current_mid, capital_K=self.quoter.capital_K,
+                        delta_limit=self.quoter.cfg.delta_limit, step_log=self.step_log)
         self.plot_mtm_percentiles()
         self.fill_rate_analysis(plot=True)

@@ -196,8 +196,68 @@ class PnLTracker:
         }
 
     @staticmethod
+    def _continuous_mtm(df: pd.DataFrame, step_log: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute MtM P&L and its decomposition at every simulation step.
+
+        Forward-fills cumulative cash, fees, and inception spread from fill events
+        into the step log, then computes at each step:
+          continuous_mtm         = cum_cash_ff + inventory × fair_mid
+          continuous_revaluation = continuous_mtm - cum_inception_ff + cum_fees_ff
+
+        Returns DataFrame with columns:
+          t, continuous_mtm, continuous_realized, continuous_inception,
+          continuous_fees, continuous_revaluation
+        """
+        sl = step_log[['t', 'inventory', 'fair_mid']].sort_values('t').reset_index(drop=True)
+        if df.empty:
+            sl['continuous_realized']   = 0.0
+            sl['continuous_inception']  = 0.0
+            sl['continuous_fees']       = 0.0
+            sl['continuous_mtm']        = sl['inventory'] * sl['fair_mid']
+            sl['continuous_revaluation'] = sl['continuous_mtm']
+            return sl[['t', 'continuous_mtm', 'continuous_realized',
+                        'continuous_inception', 'continuous_fees', 'continuous_revaluation']]
+
+        aug = PnLTracker.augment(df)
+
+        # Per-fill inception spread (MM fills only)
+        inception_per_fill = pd.Series(0.0, index=aug.index)
+        sells_idx = aug[(~aug['is_hedge']) & (aug['direction'] == 'sell')].index
+        buys_idx  = aug[(~aug['is_hedge']) & (aug['direction'] == 'buy')].index
+        inception_per_fill.loc[sells_idx] = (
+            (aug.loc[sells_idx, 'price'] - aug.loc[sells_idx, 'fair_mid'])
+            * aug.loc[sells_idx, 'size']
+        )
+        inception_per_fill.loc[buys_idx] = (
+            (aug.loc[buys_idx, 'fair_mid'] - aug.loc[buys_idx, 'price'])
+            * aug.loc[buys_idx, 'size']
+        )
+        aug['cum_inception'] = inception_per_fill.cumsum()
+
+        fill_data = (aug[['t', 'cum_cash', 'cum_fees', 'cum_inception']]
+                     .sort_values('t')
+                     .drop_duplicates('t', keep='last'))
+
+        merged = pd.merge_asof(sl, fill_data, on='t', direction='backward')
+        for col in ('cum_cash', 'cum_fees', 'cum_inception'):
+            merged[col] = merged[col].fillna(0.0)
+
+        merged['continuous_mtm'] = merged['cum_cash'] + merged['inventory'] * merged['fair_mid']
+        merged['continuous_revaluation'] = (
+            merged['continuous_mtm'] - merged['cum_inception'] + merged['cum_fees']
+        )
+        return merged.rename(columns={
+            'cum_cash':      'continuous_realized',
+            'cum_inception': 'continuous_inception',
+            'cum_fees':      'continuous_fees',
+        })[['t', 'continuous_mtm', 'continuous_realized',
+            'continuous_inception', 'continuous_fees', 'continuous_revaluation']]
+
+    @staticmethod
     def plot(df: pd.DataFrame, current_mid: float,
-             capital_K: float | None = None, delta_limit: float = 0.90) -> None:
+             capital_K: float | None = None, delta_limit: float = 0.90,
+             step_log: pd.DataFrame | None = None) -> None:
         """
         4-panel P&L and inventory chart.
 
@@ -212,6 +272,8 @@ class PnLTracker:
         current_mid  : current fair mid price (used for unrealized P&L)
         capital_K    : total capital — if provided, draws ±delta_limit lines on inventory panel
         delta_limit  : fraction of capital_K for the inventory limit lines (default 0.90)
+        step_log     : Controller.step_log DataFrame — if provided, panel 1 shows a
+                       continuous MtM computed at every step instead of the sparse fill-event MtM
         """
         if df.empty:
             print("No trades to plot.")
@@ -240,6 +302,13 @@ class PnLTracker:
 
         hedges = aug[aug['is_hedge']]
 
+        # Continuous MtM from step log (if provided)
+        cont = None
+        if step_log is not None and not step_log.empty:
+            cont = PnLTracker._continuous_mtm(df, step_log)
+            stride = max(1, len(cont) // 2000)
+            cont = cont.iloc[::stride].reset_index(drop=True)
+
         fig, axes = plt.subplots(4, 1, figsize=(14, 16), sharex=True)
         fig.patch.set_facecolor('#111111')
         for ax in axes:
@@ -252,13 +321,27 @@ class PnLTracker:
             ax.spines['bottom'].set_color('#444444')
 
         # Panel 1 — MtM P&L vs realized cash
-        axes[0].plot(aug['t'], aug['mtm_pnl'], color='#00ff88', linewidth=0.8, label='MtM P&L')
-        axes[0].plot(aug['t'], aug['cum_cash'], color='#4499ff', linewidth=0.8,
-                     linestyle='--', label='Realized cash')
+        if cont is not None:
+            axes[0].plot(cont['t'], cont['continuous_mtm'],
+                         color='#00ff88', linewidth=0.8, label='MtM P&L (continuous)')
+            axes[0].plot(cont['t'], cont['continuous_realized'],
+                         color='#4499ff', linewidth=0.8, linestyle='--', label='Realized cash')
+            if len(hedges):
+                hedge_cont = pd.merge_asof(
+                    hedges[['t']].sort_values('t'),
+                    cont[['t', 'continuous_mtm']].sort_values('t'),
+                    on='t', direction='nearest',
+                )
+                axes[0].scatter(hedge_cont['t'], hedge_cont['continuous_mtm'],
+                                color='#ff4444', s=14, zorder=5, label='Hedge')
+        else:
+            axes[0].plot(aug['t'], aug['mtm_pnl'], color='#00ff88', linewidth=0.8, label='MtM P&L')
+            axes[0].plot(aug['t'], aug['cum_cash'], color='#4499ff', linewidth=0.8,
+                         linestyle='--', label='Realized cash')
+            if len(hedges):
+                axes[0].scatter(hedges['t'], aug.loc[hedges.index, 'mtm_pnl'],
+                                color='#ff4444', s=14, zorder=5, label='Hedge')
         axes[0].axhline(0, color='#444', linewidth=0.6)
-        if len(hedges):
-            axes[0].scatter(hedges['t'], aug.loc[hedges.index, 'mtm_pnl'],
-                            color='#ff4444', s=14, zorder=5, label='Hedge')
         axes[0].set_title('MtM P&L vs Realized Cash P&L (USD)', color='white', fontsize=13)
         axes[0].set_ylabel('P&L (USD)', color='white')
         axes[0].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
@@ -276,11 +359,17 @@ class PnLTracker:
         axes[1].set_title('Inventory (EUR)', color='white', fontsize=13)
         axes[1].set_ylabel('EUR', color='white')
 
-        # Panel 3 — P&L decomposition
-        axes[2].plot(aug['t'], aug['cum_inception'],    color='#ffcc00', linewidth=0.8,
-                     label='Inception spread')
-        axes[2].plot(aug['t'], aug['cum_revaluation'],  color='#cc44ff', linewidth=0.8,
-                     label='Inventory revaluation')
+        # Panel 3 — P&L decomposition (use continuous data when step_log is available)
+        if cont is not None:
+            axes[2].plot(cont['t'], cont['continuous_inception'],   color='#ffcc00', linewidth=0.8,
+                         label='Inception spread')
+            axes[2].plot(cont['t'], cont['continuous_revaluation'], color='#cc44ff', linewidth=0.8,
+                         label='Inventory revaluation')
+        else:
+            axes[2].plot(aug['t'], aug['cum_inception'],   color='#ffcc00', linewidth=0.8,
+                         label='Inception spread')
+            axes[2].plot(aug['t'], aug['cum_revaluation'], color='#cc44ff', linewidth=0.8,
+                         label='Inventory revaluation')
         axes[2].axhline(0, color='#444', linewidth=0.6)
         axes[2].set_title('P&L Decomposition: Inception Spread vs Inventory Revaluation (USD)',
                           color='white', fontsize=13)
