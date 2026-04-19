@@ -21,43 +21,8 @@ build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# uv
-.uv/
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb_checkpoints
-
-# Environment variables
-.env
-.env.*
-!.env.example
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Logs
-*.log
-logs/
-
-# Data / large files
-*.csv
-*.parquet
-*.feather
 *.pkl
-*.h5
-*.hdf5
+# Virtual environments
+.venv
+CLAUDE.md
+.claude

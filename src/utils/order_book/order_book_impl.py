@@ -66,6 +66,9 @@ class Order_book:
         # Match log: list of dicts, converted to DataFrame on demand.
         self._match_log: list = []
 
+        # Full submission log: every order routed through the book.
+        self._submission_log: list = []
+
         # Resting MM registry (unchanged public contract).
         self._mm_resting: dict = {}
 
@@ -103,6 +106,14 @@ class Order_book:
                                          "Level", "Step"])
         return pd.DataFrame(self._match_log)
 
+    @property
+    def order_history(self) -> pd.DataFrame:
+        """All orders ever submitted to the book (client + MM), one row per order."""
+        if not self._submission_log:
+            return pd.DataFrame(columns=["OrderId", "Step", "Direction", "Price",
+                                         "Size", "Origin", "Type", "Level"])
+        return pd.DataFrame(self._submission_log)
+
     # ── Core interface ────────────────────────────────────────────────────────
 
     def register_quoter_listener(self, callback) -> None:
@@ -128,6 +139,16 @@ class Order_book:
             "level":     order._level,
             "seq":       self._seq,
         }
+        self._submission_log.append({
+            "OrderId":   order._id,
+            "Step":      self._current_step,
+            "Direction": order._direction,
+            "Price":     order._price,
+            "Size":      order._size,
+            "Origin":    order._origin,
+            "Type":      order._type,
+            "Level":     order._level,
+        })
         if order._origin == "market_maker":
             self._orders[order._id] = entry
             self._mm_resting[order._id] = {
