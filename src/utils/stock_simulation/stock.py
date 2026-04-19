@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 class Stock(object):
 
-    def __init__(self, drift: float, vol: float, origin: float = 100, tick_size: float = 0.0):
+    def __init__(self, drift: float, vol: float, origin: float = 100, tick_size: float = 0.0001):
         self.drift      = drift
         self.vol        = vol
         self.origin     = origin

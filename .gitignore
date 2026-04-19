@@ -58,6 +58,6 @@ logs/
 *.csv
 *.parquet
 *.feather
-*.pkl
+
 *.h5
 *.hdf5
