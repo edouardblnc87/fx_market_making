@@ -73,7 +73,11 @@ class QuoterConfig:
     imbalance_window: int = 50
     alpha_imbalance: float = 0.0002
 
-    # Risk management
+    # Risk management — fractions of half-capital (capital_K / 2).
+    # Capital is split 50/50 between EUR and USD at inception, so limits are
+    # expressed as a fraction of each half independently.
+    # e.g. delta_limit=0.90 → hedge fires when |EUR inventory| > 0.90 × (K/2)
+    #                        OR |EUR inv × price| (USD notional) > 0.90 × (K/2)
     delta_limit: float = 0.90
     hedge_partial_limit: float = 0.80
     emergency_penalty_multiplier: float = 5.0
@@ -415,8 +419,20 @@ class Quoter:
 
     #  RISK MANAGEMENT
 
-    def needs_hedge(self) -> bool:
-        return abs(self.inventory) / self.capital_K > self.cfg.delta_limit
+    def needs_hedge(self, fair_mid: float = 1.0) -> bool:
+        """
+        Hedge when the EUR inventory OR the USD notional exposure exceeds its limit.
+
+        Capital is assumed to be allocated 50/50 between EUR and USD at inception,
+        so each currency's limit is  delta_limit × (capital_K / 2).
+
+            EUR check: |inventory|           > delta_limit × (K / 2)
+            USD check: |inventory × price|   > delta_limit × (K / 2)
+        """
+        half_K = self.capital_K * 0.5
+        limit = self.cfg.delta_limit * half_K
+        return (abs(self.inventory) > limit or
+                abs(self.inventory * fair_mid) > limit)
 
     def hedge_order(self, depth_B: float, depth_C: float, fair_mid: float,
                     sigma: float = 0.0) -> Tuple[float, float, float]:
@@ -497,7 +513,7 @@ class Quoter:
                 self._last_eod_day = current_day
                 force_flat = True
 
-        if not force_flat and not self.needs_hedge():
+        if not force_flat and not self.needs_hedge(fair_mid):
             self._hedge_emergency = False
             return False
 
@@ -525,7 +541,8 @@ class Quoter:
         size_B, size_C, _ = self.hedge_order(depth_B, depth_C, fair_mid, sigma)
 
         inventory_after = self.inventory + size_B + size_C
-        if abs(inventory_after) / self.capital_K > self.cfg.hedge_partial_limit:
+        partial_limit = self.cfg.hedge_partial_limit * self.capital_K * 0.5
+        if abs(inventory_after) > partial_limit:
             self._hedge_emergency = True
         else:
             self._hedge_emergency = False
@@ -631,7 +648,7 @@ class Quoter:
             "spread_bps": (best_ask - best_bid) / fair_mid * 10_000.0,
             "inventory_EUR": self.inventory,
             "inventory_ratio": inventory_ratio,
-            "needs_hedge": self.needs_hedge(),
+            "needs_hedge": self.needs_hedge(fair_mid),
             "effective_gap_ms": self._effective_gap_s * 1000.0,
             "sigma_used": sigma,
             "n_fills": len(self._fill_history),

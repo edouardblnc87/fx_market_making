@@ -1,7 +1,35 @@
 import pickle
 import pathlib
 
-_DEFAULT_PATH = pathlib.Path(__file__).parent / "saved_session.pkl"
+_DEFAULT_PATH   = pathlib.Path(__file__).parent / "saved_session.pkl"
+_MARKETS_PATH   = pathlib.Path(__file__).parent / "saved_markets.pkl"
+
+
+def save_markets(stock, market_B, market_C, path=None):
+    """
+    Pickle only stock + markets B/C (the expensive, slow-to-generate objects).
+    Call this once after generating spreads; reload with load_markets() every run.
+    """
+    path = pathlib.Path(path) if path else _MARKETS_PATH
+    with open(path, "wb") as f:
+        pickle.dump({"stock": stock, "market_B": market_B, "market_C": market_C}, f,
+                    protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"Markets saved → {path}")
+
+
+def load_markets(path=None):
+    """
+    Load stock + markets B/C from disk.
+
+    Returns
+    -------
+    stock, market_B, market_C
+    """
+    path = pathlib.Path(path) if path else _MARKETS_PATH
+    with open(path, "rb") as f:
+        d = pickle.load(f)
+    print(f"Markets loaded ← {path}")
+    return d["stock"], d["market_B"], d["market_C"]
 
 
 def save_session(stock, market_B, market_C, market_maker, book, controller,
