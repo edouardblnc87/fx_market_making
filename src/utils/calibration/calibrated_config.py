@@ -14,12 +14,17 @@ Usage:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from ..market_maker.quoter import QuoterConfig
 from ..client_flow import config as flow_defaults
 
 from .volatility_calibrator import VolatilityCalibrator
 from .spread_calibrator import SpreadCalibrator
 from .gamma_optimizer import GammaOptimizer
+from .k_calibrator import KCalibrator
+from .ladder_calibrator import LadderCalibrator
+from .stale_calibrator import StaleCalibrator
 
 
 # Default arrival/size params (from client_flow/config.py).
@@ -45,9 +50,12 @@ class CalibratedConfigBuilder:
 
     What is calibrated (our strategy):
       - gamma, omega      — risk aversion & horizon  (GammaOptimizer)
-      - vol_window         — EWMA span               (VolatilityCalibrator)
+      - vol_window_s       — EWMA span               (VolatilityCalibrator)
       - alpha_spread       — inventory spread weight  (SpreadCalibrator)
       - alpha_imbalance    — OFI tilt                 (SpreadCalibrator)
+      - k                  — arrival intensity decay  (KCalibrator)
+      - beta, Q_base       — ladder shape             (LadderCalibrator)
+      - stale_s            — staleness threshold      (StaleCalibrator)
 
     What is NOT calibrated (exogenous market):
       - A_buy/A_sell, k_buy/k_sell  — client arrival rates
@@ -71,28 +79,48 @@ class CalibratedConfigBuilder:
         dt = ctrl.market_B.stock.time_step
         capital_K = ctrl.quoter.capital_K
 
-        # --- Quoter-side calibrators ---
+        # --- Quoter-side calibrators (parallelised where dependencies allow) ---
 
-        vol_cal = VolatilityCalibrator(mid_prices, dt)
-        vol_params = vol_cal.fit_ewma()
-
+        vol_cal    = VolatilityCalibrator(mid_prices, dt)
         spread_cal = SpreadCalibrator(trade_history, step_log, capital_K)
-        spread_params = spread_cal.fit()
+        k_cal      = KCalibrator(trade_history)
+        ladder_cal = LadderCalibrator(trade_history)
+        stale_cal  = StaleCalibrator(trade_history, step_log)
 
-        # GammaOptimizer uses default arrival/size as fixed market assumptions
+        # Round 1: all fill-based + vol calibrators are mutually independent.
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            f_vol    = pool.submit(vol_cal.fit_ewma)
+            f_spread = pool.submit(spread_cal.fit)
+            f_k      = pool.submit(k_cal.fit)
+            f_ladder = pool.submit(ladder_cal.fit)
+            f_stale  = pool.submit(stale_cal.fit)
+            vol_params    = f_vol.result()
+            spread_params = f_spread.result()
+            k_params      = f_k.result()
+            ladder_params = f_ladder.result()
+            stale_params  = f_stale.result()
+
+        # Round 2: gamma optimisation + vol comparison both need vol_params.
         gamma_opt = GammaOptimizer(
             trade_history, step_log, mid_prices, dt,
             _ARRIVAL_DEFAULTS, _SIZE_DEFAULTS, vol_params,
         )
-        gamma_params = gamma_opt.optimize()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_gamma = pool.submit(gamma_opt.optimize)
+            f_comp  = pool.submit(vol_cal.compare)
+            gamma_params   = f_gamma.result()
+            vol_comparison = f_comp.result()
 
         # --- Store diagnostics ---
 
         self.diagnostics = {
             "volatility_ewma": vol_params,
-            "volatility_comparison": vol_cal.compare(),
+            "volatility_comparison": vol_comparison,
             "spread": spread_params,
             "gamma": gamma_params,
+            "k": k_params,
+            "ladder": ladder_params,
+            "stale": stale_params,
         }
 
         # --- Build calibrated QuoterConfig ---
@@ -100,11 +128,16 @@ class CalibratedConfigBuilder:
         quoter_cfg = QuoterConfig(
             gamma=gamma_params["gamma"],
             omega=gamma_params["omega"],
-            vol_window=vol_params["vol_window"],
+            vol_window_s=vol_params["vol_window"] * dt,
             alpha_spread=spread_params["alpha_spread"],
             alpha_imbalance=spread_params["alpha_imbalance"],
+            k=k_params["k"],
+            beta=ladder_params["beta"],
+            Q_base=ladder_params["Q_base"],
+            stale_s=stale_params["stale_s"],
         )
 
+        self._dt = dt
         self._quoter_cfg = quoter_cfg
         return quoter_cfg
 
@@ -124,11 +157,17 @@ class CalibratedConfigBuilder:
         ]
 
         rows = [
-            ("gamma",           "0.1",    d["gamma"]["gamma"]),
+            ("gamma",           "0.1",       d["gamma"]["gamma"]),
             ("omega",           f"{1/(8*3600):.2e}", d["gamma"]["omega"]),
-            ("vol_window",      "6000",   d["volatility_ewma"]["vol_window"]),
-            ("alpha_spread",    "0.5",    d["spread"]["alpha_spread"]),
-            ("alpha_imbalance", "0.0002", d["spread"]["alpha_imbalance"]),
+            ("vol_window_s",    "60.0",      d["volatility_ewma"]["vol_window"] * self._dt),
+            ("alpha_spread",    "0.5",       d["spread"]["alpha_spread"]),
+            ("alpha_imbalance", "0.0002",    d["spread"]["alpha_imbalance"]),
+            ("k",               "0.3",       d["k"]["k"]),
+            ("k_buy",           "0.3",       d["k"]["k_buy"]),
+            ("k_sell",          "0.3",       d["k"]["k_sell"]),
+            ("beta",            "0.3",       d["ladder"]["beta"]),
+            ("Q_base",          "100000",    d["ladder"]["Q_base"]),
+            ("stale_s",         "3.0",       d["stale"]["stale_s"]),
         ]
 
         for name, default, calibrated in rows:
