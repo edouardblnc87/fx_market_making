@@ -44,7 +44,7 @@ env/
 .idea/
 *.swp
 *.swo
-
+*.pkl
 # OS
 Thumbs.db
 ehthumbs.db

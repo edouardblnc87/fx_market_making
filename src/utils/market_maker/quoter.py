@@ -19,8 +19,8 @@ FX_SESSION_RESETS_UTC = [8 * 3600, 16 * 3600]
 # London/NY overlap is the deepest and most liquid; Tokyo is comparatively thin. A single k calibrated on one session misprices fill probability on others.
 # These multipliers are applied to cfg.k at quote time via _session_k().
 _SESSION_K_MULTIPLIERS = {
-    "tokyo":   0.75,   # thinner book, orders less sensitive to distance → lower k
-    "london":  1.25,   # deepest session, strong price sensitivity → higher k
+    "tokyo":   1,   # thinner book, orders less sensitive to distance → lower k
+    "london":  1,   # deepest session, strong price sensitivity → higher k
     "newyork": 1.00,   # reference calibration
 }
 
