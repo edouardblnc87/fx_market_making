@@ -1,5 +1,122 @@
 \section{Market Simulator for Venues B and C}
 \label{sec:market-simulator}
-% Subject task 2 --- covers src/utils/stock_simulation/ and src/utils/market_simulator/.
-% TODO: GBM/GARCH/Heston price paths, noised mid, the 5 spread regimes,
-% depth generation, why we share one Stock across B and C via deepcopy.
+
+Exchanges $B$ and $C$ are external reference venues: we never post on
+them, we only read them. Our quoting engine on $A$ consumes the best
+bid, the best ask, and the best-size of each, and nothing else. We
+therefore do not simulate a full limit order book on $B$ or $C$: all
+the depth beyond the top of book would be detail the rest of the
+system never looks at. Instead we simulate a mid-price process and
+build a synthetic bid/ask/depth layer around it. This is the second of
+the two options offered by the subject, and it is both cheaper to run
+and sufficient for everything the market maker on $A$ has to decide.
+The reduced-form choice keeps realism where it matters --- spreads
+that widen under stress and depth that thins with them --- while
+avoiding the combinatorial cost of simulating individual order
+arrivals at two venues.
+
+\subsection{Noised mid}
+\label{sec:ms-mid}
+
+The fundamental value $V_t$ is the GBM (or GARCH, or Heston) path
+produced by the stock simulator. The observed mid on $B$ and $C$ is
+$V_t$ plus microstructure noise, in the spirit of \citet{roll1984simple}:
+\[
+  P^{\mathrm{mid}}_{B/C}(t) = V_t + \eta \cdot \sigma \cdot \sqrt{\Delta t}\cdot Z_t,
+  \quad Z_t \sim \mathcal{N}(0,1),
+\]
+with $\eta = 0.1$. Each venue draws an independent $Z_t$ path, so $B$
+and $C$ are noised versions of the same fundamental. One subtle
+point: every spread model below estimates realized volatility from
+$V_t$, not from $P^{\mathrm{mid}}$, because differencing the noised
+series would double-count the microstructure variance inside the vol
+estimator. The zero-mean estimator used for that (see
+\texttt{compute\_rv\_zero\_mean}) is unbiased for zero-drift GBM and
+lower-variance than the sample std over short windows.
+
+\subsection{Spread regimes}
+\label{sec:ms-spreads}
+
+We benchmarked five regimes of increasing realism --- Static,
+Stochastic, Adaptive, Asymmetric, and Skewed --- and kept two. We
+reject Static because a price-independent width ignores volatility
+entirely; the market maker is widest exactly when they should be
+widest, but never adapts. Stochastic scales the width with realized
+vol but never returns to the competitive floor even in calm markets,
+which systematically over-charges. Asymmetric mean-reverts
+realistically but treats up-moves and down-moves the same way, leaving
+a latency-arbitrage gap for HFTs who, seeing the vol spike 150\,ms
+before us, can infer our quote path. We deploy \textbf{Adaptive on
+$C$} and \textbf{Skewed on $B$}.
+
+\paragraph{Venue $C$ --- Adaptive.}
+A symmetric half-spread proportional to how much realized vol deviates
+from the long-run input $\sigma$:
+\[
+  h(t) \;=\; h_0 \cdot \Bigl(1 + \alpha \cdot \bigl(\widehat{RV}_t/\sigma - 1\bigr)\Bigr),
+  \qquad h(t) \geq 0.1 \cdot h_0,
+\]
+with $h_0 = \mathrm{mid}(t) \cdot s_{\mathrm{bps}} / 10000$ and
+$\widehat{RV}_t$ an EMA-smoothed rolling vol over a $120$\,s window.
+The width is tight at baseline, widens on shocks, and tightens
+symmetrically when calm returns. A $10\%$ floor prevents collapse near
+zero. $C$ carries $25\%$ of volume --- a smaller venue where informed
+flow is weaker, competition enforces a tight floor, and the symmetry
+of up vs. down adjustment is not a material leak.
+
+\paragraph{Venue $B$ --- Skewed.}
+Same vol-adaptive width, plus a directional shift of the quote centre
+driven by a short-horizon momentum signal. Let $\hat m_t$ be the
+EMA of log-returns normalised by its steady-state noise floor; the
+skew is
+\[
+  \delta_t \;=\; \gamma \cdot h(t) \cdot \tanh\!\bigl(\mathrm{sign}(\hat m_t)\cdot
+           \max(|\hat m_t| - \tau,\, 0)\bigr),
+\]
+with $\tau = 1.5$ the dead-band threshold. Small random wiggles map to
+$\delta_t = 0$ exactly; only sustained directional moves shift the
+centre. Posted quotes become $\mathrm{ask} = \mathrm{mid} + h + \delta$
+and $\mathrm{bid} = \mathrm{mid} - h + \delta$: width is unchanged,
+the centre moves in the direction of the trend. $B$ carries the
+dominant $75\%$ of volume, where short-horizon order-flow imbalance
+predicts returns \citep{cont2014price}; a momentum-unaware venue there
+would be repeatedly picked off \citep{engle2004impacts,biais1995empirical}.
+
+\subsection{Depth}
+\label{sec:ms-depth}
+
+Depth at each step is derived deterministically from spread width, not
+simulated as an independent process:
+\[
+  \mathrm{depth}_t \;=\; \bar D \cdot \frac{\overline{S}}{S_t},
+\]
+where $S_t$ is the full spread and $\overline{S}$ its session mean.
+The economic story is simple: when the external market maker is
+confident, they quote tight and large; when stressed, they pull size
+and widen. The hedge router on $A$ reads this array with the same
+$200\,\mathrm{ms}$ ($B$) / $170\,\mathrm{ms}$ ($C$) latency offset as the
+mid, and caps each hedge leg at the available depth.
+
+\subsection{One stock, two venues}
+\label{sec:ms-shared}
+
+$B$ and $C$ are two \texttt{Market} objects wrapping the same
+\texttt{Stock} via \texttt{copy.deepcopy}. The fundamental path $V_t$
+is shared; the noise draws and spread realisations are independent.
+We deliberately do not model $B/C$ price divergence: the cross-venue
+edge in this project is the latency asymmetry (HFTs see $B/C$ at
+$50\,\mathrm{ms}$ while we see them at $200/170\,\mathrm{ms}$), not
+price disagreement between venues.
+
+\subsection{Validation}
+\label{sec:ms-validation}
+
+Figure~\ref{fig:spread-regimes-garch} shows the five width paths under
+a GARCH-plus-jump run --- the one regime where the models visibly
+differentiate. Each width panel is annotated with its Pearson
+correlation to realized vol; the bottom panel shows the skew
+$\delta_t$ activating at each jump under the Skewed regime and
+remaining at zero elsewhere.
+
+\figplaceholder{spread-regimes-garch.png --- export from \texttt{market\_garch.compare\_spreads()} in \texttt{test/price\_simulation.ipynb}}{Width panels with realized-vol overlay and the Skew $\delta_t$ path, GARCH+jump run.}
+\label{fig:spread-regimes-garch}
