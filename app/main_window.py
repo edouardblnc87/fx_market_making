@@ -16,12 +16,51 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QLabel, QComboBox, QSpinBox, QDoubleSpinBox,
     QPushButton, QStatusBar, QDialog, QTextEdit, QMessageBox,
-    QScrollArea, QSizePolicy,
+    QScrollArea, QSizePolicy, QProgressBar,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 
-from .workers import StockWorker, Phase1Worker, CalibrationWorker, Phase2Worker, Phase3Worker
+import matplotlib.pyplot as plt
+
+from .workers import StockWorker, BuildMarketsWorker, Phase1Worker, CalibrationWorker, Phase2Worker, Phase3Worker
 from .result_window import ResultWindow
+
+
+def _capture_report(fn) -> tuple[str, list]:
+    """
+    Call fn() on the main thread.
+    Returns (stdout_text, figures) where:
+      - stdout_text : everything printed by report()
+      - figures     : all figures captured via plt.show(),
+                      reordered so config summary is last
+    """
+    import io, sys
+
+    figs = []
+    orig_show = plt.show
+    orig_stdout = sys.stdout
+    buf = io.StringIO()
+
+    def _grab(*a, **kw):
+        fig = plt.gcf()
+        if fig not in figs:
+            figs.append(fig)
+
+    plt.show = _grab
+    sys.stdout = buf
+    try:
+        fn()
+    finally:
+        plt.show = orig_show
+        sys.stdout = orig_stdout
+
+    text = buf.getvalue()
+
+    # Reorder: config summary (always index 0) moves to last
+    if len(figs) > 1:
+        figs = figs[1:] + [figs[0]]
+
+    return text, figs
 
 
 def _spin(val: float, lo: float, hi: float, decimals: int = 4,
@@ -53,10 +92,11 @@ class MainWindow(QMainWindow):
         self.stock    = None
         self.market_B = None
         self.market_C = None
-        self.ctrl_p1  = None
-        self.cal_cfg  = None
-        self.ctrl_p2  = None
-        self.ctrl_p3  = None
+        self.ctrl_p1     = None
+        self.cal_cfg     = None
+        self.ctrl_p1cal  = None   # Phase 1 re-run with calibrated config (comparison)
+        self.ctrl_p2     = None
+        self.ctrl_p3     = None
 
         self._active_worker = None
         self._result_windows: list[ResultWindow] = []
@@ -80,6 +120,14 @@ class MainWindow(QMainWindow):
         sb = QStatusBar()
         self.setStatusBar(sb)
         self._status = sb
+
+        self._prog_bar = QProgressBar()
+        self._prog_bar.setRange(0, 100)
+        self._prog_bar.setMaximumWidth(220)
+        self._prog_bar.setMinimumWidth(180)
+        self._prog_bar.setTextVisible(True)
+        self._prog_bar.setVisible(False)
+        sb.addPermanentWidget(self._prog_bar)
 
     def _stock_group(self) -> QGroupBox:
         grp = QGroupBox("Stock Simulation")
@@ -223,13 +271,30 @@ class MainWindow(QMainWindow):
         r2.addStretch()
         lay.addLayout(r2)
 
+        # Phase 1 Calibrated — comparison on same stock path
+        r2b = QHBoxLayout()
+        self._btn_p1cal = QPushButton("Phase 1 Calibrated — Compare")
+        self._btn_p1cal.setObjectName("btn_p1cal")
+        self._btn_p1cal.clicked.connect(self._run_p1cal)
+        r2b.addWidget(self._btn_p1cal)
+        self._lbl_p1cal = QLabel("(same path as Phase 1, calibrated config)")
+        self._lbl_p1cal.setObjectName("lbl_status_p1cal")
+        r2b.addSpacing(12)
+        r2b.addWidget(self._lbl_p1cal)
+        r2b.addStretch()
+        lay.addLayout(r2b)
+
         # Phase 2
         r3 = QHBoxLayout()
         self._btn_p2 = QPushButton("Run Phase 2")
         self._btn_p2.setObjectName("btn_phase2")
         self._btn_p2.clicked.connect(self._run_phase2)
         r3.addWidget(self._btn_p2)
-        self._lbl_p2 = QLabel("(uses calibrated config if available)")
+        r3.addWidget(QLabel("Seed P2:"))
+        self._seed_p2 = _ispin(99, 0, 99999)
+        self._seed_p2.setToolTip("Fresh stock seed for Phase 2 & 3 (different path from Phase 1)")
+        r3.addWidget(self._seed_p2)
+        self._lbl_p2 = QLabel("(new stock path · calibrated config if available)")
         self._lbl_p2.setObjectName("lbl_status_p2")
         r3.addSpacing(12)
         r3.addWidget(self._lbl_p2)
@@ -273,10 +338,14 @@ class MainWindow(QMainWindow):
         self._btn_build.setEnabled(not busy and has_stock)
         self._btn_p1.setEnabled(not busy and has_markets)
         self._btn_cal.setEnabled(not busy and has_p1)
+        self._btn_p1cal.setEnabled(not busy and has_markets and has_cal)
         self._btn_p2.setEnabled(not busy and has_markets)
         self._btn_p3.setEnabled(not busy and has_markets)
 
     def _set_busy(self, msg: str):
+        self._prog_bar.setRange(0, 100)
+        self._prog_bar.setValue(0)
+        self._prog_bar.setVisible(True)
         self._status.showMessage(f"⏳  {msg}")
         self._refresh_buttons()
 
@@ -285,13 +354,25 @@ class MainWindow(QMainWindow):
         self._active_worker = None
         if w is not None:
             w.deleteLater()
+        self._prog_bar.setVisible(False)
         self._status.showMessage(msg)
         self._refresh_buttons()
+
+    @Slot(int, str)
+    def _on_progress(self, pct: int, msg: str):
+        if pct < 0:
+            # indeterminate — pulse animation
+            self._prog_bar.setRange(0, 0)
+        else:
+            self._prog_bar.setRange(0, 100)
+            self._prog_bar.setValue(pct)
+        self._status.showMessage(f"⏳  {msg}")
 
     # ── Worker plumbing ───────────────────────────────────────────────────
 
     def _start_worker(self, worker, busy_msg: str):
         self._active_worker = worker
+        worker.progress.connect(self._on_progress)
         self._set_busy(busy_msg)
         worker.start()
 
@@ -341,16 +422,16 @@ class MainWindow(QMainWindow):
         if self.stock is None:
             QMessageBox.warning(self, "No Stock", "Simulate a stock first.")
             return
-        # rebuild markets from existing stock (fast — no re-simulation)
-        self._set_busy("Building markets B & C…")
-        try:
-            from utils.report.fast_config import build_markets_B_C
-            self.market_B, self.market_C = build_markets_B_C(self.stock)
-            self._lbl_status_stock.setText("✓ Markets B & C built")
-            self._set_idle("Markets built")
-        except Exception as exc:
-            self._set_idle("Error")
-            QMessageBox.critical(self, "Build Error", str(exc))
+        w = BuildMarketsWorker(self.stock, self)
+        w.finished.connect(self._on_markets_done)
+        w.error.connect(self._on_error)
+        self._start_worker(w, "Building markets B & C…")
+
+    def _on_markets_done(self, market_B, market_C):
+        self.market_B = market_B
+        self.market_C = market_C
+        self._lbl_status_stock.setText("✓ Markets B & C built")
+        self._set_idle("Markets built")
 
     # ── Phase 1 ───────────────────────────────────────────────────────────
 
@@ -368,12 +449,13 @@ class MainWindow(QMainWindow):
         w.error.connect(self._on_error)
         self._start_worker(w, "Running Phase 1…")
 
-    def _on_p1_done(self, ctrl, figs, elapsed):
+    def _on_p1_done(self, ctrl, elapsed):
         self.ctrl_p1 = ctrl
         self._lbl_p1.setText(f"✓ done in {elapsed:.0f}s")
         self._lbl_cal.setText("(requires Phase 1 ✓)")
         self._set_idle(f"Phase 1 complete ({elapsed:.0f} s)")
-        self._open_result(figs, "Phase 1 — Results")
+        text, figs = _capture_report(ctrl.report)
+        self._open_result(figs, "Phase 1 — Results", text)
 
     # ── Calibration ───────────────────────────────────────────────────────
 
@@ -405,7 +487,49 @@ class MainWindow(QMainWindow):
         lay.addWidget(btn, alignment=Qt.AlignRight)
         dlg.exec()
 
+    # ── Phase 1 Calibrated (comparison) ──────────────────────────────────
+
+    def _run_p1cal(self):
+        n_steps = self.stock.n_steps if self.stock else int(
+            self._n_days.value() * 86_400 / self._dt.value())
+        w = Phase2Worker(
+            self.market_B, self.market_C, self.cal_cfg,
+            n_steps=n_steps,
+            capital=self._capital.value(),
+            client_seed=self._seed.value(),   # same seed as Phase 1
+            parent=self,
+        )
+        w.finished.connect(self._on_p1cal_done)
+        w.error.connect(self._on_error)
+        self._start_worker(w, "Running Phase 1 Calibrated (comparison)…")
+
+    def _on_p1cal_done(self, ctrl, elapsed):
+        self.ctrl_p1cal = ctrl
+        self._lbl_p1cal.setText(f"✓ done in {elapsed:.0f}s")
+        self._set_idle(f"Phase 1 Calibrated complete ({elapsed:.0f} s)")
+        text, figs = _capture_report(ctrl.report)
+        self._open_result(figs, "Phase 1 Calibrated — Comparison (same path as Phase 1)", text)
+
     # ── Phase 2 ───────────────────────────────────────────────────────────
+
+    def _stock_params_p2(self) -> dict:
+        """Stock params dict for Phase 2/3, using Seed P2."""
+        return {
+            "model":   self._model.currentText(),
+            "seed":    self._seed_p2.value(),
+            "n_days":  self._n_days.value(),
+            "vol":     self._vol.value(),
+            "origin":  self._origin.value(),
+            "dt":      self._dt.value(),
+            "alpha":   self._g_alpha.value(),
+            "beta":    self._g_beta.value(),
+            "lam":     self._g_lam.value(),
+            "sigma_j": self._g_sigj.value(),
+            "kappa":   self._h_kappa.value(),
+            "theta":   self._h_theta.value(),
+            "xi":      self._h_xi.value(),
+            "rho":     self._h_rho.value(),
+        }
 
     def _run_phase2(self):
         from utils.market_maker.quoter import QuoterConfig  # noqa: PLC0415
@@ -416,19 +540,21 @@ class MainWindow(QMainWindow):
             self.market_B, self.market_C, cfg,
             n_steps=n_steps,
             capital=self._capital.value(),
-            client_seed=self._seed.value(),
+            client_seed=self._seed_p2.value(),
+            stock_params=self._stock_params_p2(),
             parent=self,
         )
         w.finished.connect(self._on_p2_done)
         w.error.connect(self._on_error)
-        self._start_worker(w, "Running Phase 2…")
+        self._start_worker(w, "Running Phase 2 (fresh stock)…")
 
-    def _on_p2_done(self, ctrl, figs, elapsed):
+    def _on_p2_done(self, ctrl, elapsed):
         self.ctrl_p2 = ctrl
         label = "calibrated" if self.cal_cfg else "default config"
         self._lbl_p2.setText(f"✓ done in {elapsed:.0f}s ({label})")
         self._set_idle(f"Phase 2 complete ({elapsed:.0f} s)")
-        self._open_result(figs, "Phase 2 — Results")
+        text, figs = _capture_report(ctrl.report)
+        self._open_result(figs, "Phase 2 — Results", text)
 
     # ── Phase 3 ───────────────────────────────────────────────────────────
 
@@ -442,24 +568,26 @@ class MainWindow(QMainWindow):
             self.market_B, self.market_C, cfg,
             n_steps=n_steps,
             capital=self._capital.value(),
-            client_seed=self._seed.value(),
+            client_seed=self._seed_p2.value(),
             n_days=n_days,
             hft_depth=self._hft_depth.value(),
+            stock_params=self._stock_params_p2(),
             parent=self,
         )
         w.finished.connect(self._on_p3_done)
         w.error.connect(self._on_error)
-        self._start_worker(w, "Running Phase 3 (HFT)…")
+        self._start_worker(w, "Running Phase 3 (HFT, fresh stock)…")
 
-    def _on_p3_done(self, ctrl, figs, elapsed):
+    def _on_p3_done(self, ctrl, elapsed):
         self.ctrl_p3 = ctrl
         self._lbl_p3.setText(f"✓ done in {elapsed:.0f}s")
         self._set_idle(f"Phase 3 complete ({elapsed:.0f} s)")
-        self._open_result(figs, "Phase 3 — HFT Results")
+        text, figs = _capture_report(ctrl.report)
+        self._open_result(figs, "Phase 3 — HFT Results", text)
 
     # ── Result window ─────────────────────────────────────────────────────
 
-    def _open_result(self, figs: list, title: str):
-        win = ResultWindow(figs, title, parent=None)
+    def _open_result(self, figs: list, title: str, report_text: str = ""):
+        win = ResultWindow(figs, title, report_text=report_text, parent=None)
         self._result_windows.append(win)
         win.show_and_raise()

@@ -57,6 +57,10 @@ QPushButton#btn_calibrate { background-color: #5a4a8e; }
 QPushButton#btn_calibrate:hover { background-color: #7260b0; }
 QPushButton#btn_calibrate:disabled { background-color: #2d2d2d; color: #555555; }
 
+QPushButton#btn_p1cal { background-color: #1a6b6b; }
+QPushButton#btn_p1cal:hover { background-color: #228888; }
+QPushButton#btn_p1cal:disabled { background-color: #2d2d2d; color: #555555; }
+
 QPushButton#btn_phase2 { background-color: #8e5a2a; }
 QPushButton#btn_phase2:hover { background-color: #b07235; }
 QPushButton#btn_phase2:disabled { background-color: #2d2d2d; color: #555555; }
@@ -155,6 +159,7 @@ QLabel#lbl_status_stock { color: #4ec9b0; font-size: 11px; }
 QLabel#lbl_status_markets { color: #4ec9b0; font-size: 11px; }
 QLabel#lbl_status_p1 { color: #4ec9b0; font-size: 11px; }
 QLabel#lbl_status_cal { color: #c586c0; font-size: 11px; }
+QLabel#lbl_status_p1cal { color: #4ec9b0; font-size: 11px; }
 QLabel#lbl_status_p2 { color: #ce9178; font-size: 11px; }
 QLabel#lbl_status_p3 { color: #f44747; font-size: 11px; }
 
