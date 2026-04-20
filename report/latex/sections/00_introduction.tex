@@ -1,0 +1,101 @@
+\section{Introduction}
+\label{sec:introduction}
+
+\subsection{Motivation}
+\label{sec:intro-motivation}
+
+A newly launched exchange --- referred to throughout this report as exchange
+$A$ --- has mandated our firm as the sole Designated Market Maker for its
+EUR/USD spot book. Two established venues, $B$ and $C$, remain the primary
+sites of price discovery, carrying on average $75\%$ and $25\%$ of the daily
+volume respectively. We receive market data from $B$ with a $200\,$ms delay
+and from $C$ with a $170\,$ms delay, while high-frequency participants reach
+the same data in $50\,$ms and can act on exchange $A$ before our own view of
+fair value has refreshed. The mandate commits us to continuously quoting ten
+levels on each side of the book at a common $1\,$bp tick, with a starting
+capital $K$ split evenly between EUR and USD and an asymmetric fee grid
+(taker/maker of $0.04\%/0.01\%$ on $A$, $0.02\%/0.009\%$ on $B$ and
+$0.03\%/0.009\%$ on $C$). A delta limit caps the EUR inventory we are willing
+to warehouse before externalising risk as taker flow on $B$ and $C$.
+
+Three constraints shape every design decision that follows. First, on the
+day exchange $A$ goes live no historical fills or counterparty behaviour are
+observable, so the initial quoting policy cannot be learnt from data and
+must be derived from first-principles microstructure models. Second, the
+latency gap to HFTs exposes every resting quote to adverse selection, which
+the pricing model must compensate for rather than ignore. Third, because we
+cannot market-make on $B$ or $C$, the delta limit turns inventory management
+into an active cross-venue hedging problem rather than a passive
+book-balancing exercise.
+
+\subsection{Objective}
+\label{sec:intro-objective}
+
+Our goal is to deliver an end-to-end market-making system that addresses the
+three constraints above and can be evaluated under the conditions described
+in the subject brief. The project is split into three phases matching the
+mandate timeline. Phase 1 bootstraps liquidity without any trading history,
+using a heuristic quoting policy derived from classical market-making
+theory. The fair mid is reconstructed from the two reference venues at
+their respective latencies, the bid-ask spread is sized to compensate for
+both inventory risk and adverse selection, and quotes are skewed in the
+direction of recent order-flow imbalance. A dedicated hedge router
+externalises excess EUR inventory on $B$ and $C$ whenever the delta limit
+is approached. Phase 2 re-estimates the Phase 1 parameters by maximum likelihood
+from a simulated month of fills. Phase 3 studies how our quoting policy
+should degrade from a price-competitive quoter to a reliable fallback
+liquidity provider once aggressive HFT market makers populate the inside of
+the book.
+
+\subsection{Simulation Environment}
+\label{sec:intro-simulation}
+
+Because the exchange has no history at launch and we cannot run the strategy
+against real counterparties, the evaluation environment is a layered
+simulation built specifically for this project. A stochastic mid-price
+generator (GBM, GARCH with jumps, or Heston) produces the fair value
+underlying both reference venues. A venue simulator wraps that path into a
+realistic bid/ask and depth profile per venue, with a choice of five spread
+regimes (static, stochastic, adaptive, asymmetric, and skewed)
+reflecting the microstructure assumptions we want to stress. A
+limit order book with a matching engine and fill events sits at the centre
+of exchange $A$; a Poisson client-flow generator with
+truncated Pareto sizes delivers counterparty orders whose intensity decays
+exponentially in the quoted half-spread; and a reporting layer reconstructs
+the full mark-to-market and realised P\&L decomposition from the trade
+history.
+
+\subsection{Evaluation}
+\label{sec:intro-evaluation}
+
+Each phase is evaluated on the subject-mandated one-month simulated
+backtest, with the capital $K$ reset to its initial split at the start of
+every phase. For Phase 1 we report realised and mark-to-market P\&L, the
+percentile envelope of mark-to-market as a function of time since trade
+inception, top-ten trades by size, full-versus-partial fill rates at each of
+the ten quoting levels, and inventory trajectories against the delta limit.
+For Phase 2 we compare the heuristic and calibrated configurations on an
+independent month using the same diagnostics, so that any difference in
+performance is attributable to the updated parameters rather than to the
+market regime. For Phase 3 we measure both our own P\&L under HFT
+competition and the quality of liquidity observed by exchange-$A$ clients,
+distinguishing small from large trades and quantifying the continuity of
+two-sided quoting through volatility spikes, one-sided HFT retreats, and
+venue outages.
+
+\subsection{Report Structure}
+\label{sec:intro-structure}
+
+The remainder of the report follows the step-by-step structure of the
+subject. \autoref{sec:orderbook} introduces the order-book data structure
+and matching rule; \autoref{sec:market-simulator} describes the venue
+simulator and the family of spread regimes supported;
+\autoref{sec:quoter} presents the quoting framework in full;
+\autoref{sec:book-updates} covers submission and cancellation handling;
+\autoref{sec:simulation-loop} documents the simulation loop that binds the
+modules together; \autoref{sec:pnl} details the inventory and P\&L
+bookkeeping; \autoref{sec:backtest} gathers the Phase 1 backtest outputs;
+\autoref{sec:phase2} analyses the calibration results;
+\autoref{sec:phase3} examines the Phase 3 fallback behaviour; and
+\autoref{sec:conclusion} summarises the findings and outlines the
+remaining modelling questions.

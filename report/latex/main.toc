@@ -1,0 +1,16 @@
+\contentsline {section}{\numberline {1}Introduction}{2}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Motivation}{2}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Objective}{2}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Simulation Environment}{2}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}Evaluation}{3}{subsection.1.4}%
+\contentsline {subsection}{\numberline {1.5}Report Structure}{3}{subsection.1.5}%
+\contentsline {section}{\numberline {2}Order Book}{4}{section.2}%
+\contentsline {section}{\numberline {3}Market Simulator for Venues B and C}{5}{section.3}%
+\contentsline {section}{\numberline {4}Market-Making Logic on Exchange A}{6}{section.4}%
+\contentsline {section}{\numberline {5}Applying Submissions and Cancellations}{7}{section.5}%
+\contentsline {section}{\numberline {6}Simulation Loop}{8}{section.6}%
+\contentsline {section}{\numberline {7}Inventory and P\&L Tracking}{9}{section.7}%
+\contentsline {section}{\numberline {8}Phase 1 Backtest Report}{10}{section.8}%
+\contentsline {section}{\numberline {9}Phase 2 --- Calibration from Trading History}{11}{section.9}%
+\contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{12}{section.10}%
+\contentsline {section}{\numberline {11}Conclusion}{13}{section.11}%
