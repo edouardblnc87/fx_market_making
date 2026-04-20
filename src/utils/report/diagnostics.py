@@ -57,6 +57,7 @@ def _ds(df: pd.DataFrame, n: int = _MAX_PTS) -> pd.DataFrame:
     return df.iloc[::stride]
 
 
+
 def _vlines(ax, xs, color=_HED, alpha=0.7, lw=1.2, label=None):
     for i, x in enumerate(xs):
         ax.axvline(x, color=color, alpha=alpha, lw=lw,
@@ -153,27 +154,34 @@ class DiagnosticsReport:
         ax1.fill_between(t, sl["bid_A"], sl["ask_A"],
                          alpha=0.15, color=_MID, label="Quoted A spread")
 
-        # fill events
+        # fill events — capped at 400 markers to avoid overplotting
         mf = self.mm_fills
         if len(mf):
-            t_fill = mf["t"].values if "t" in mf.columns else mf["step"].values
             buys  = mf[mf["direction"] == "buy"]
             sells = mf[mf["direction"] == "sell"]
-            t_buy  = buys["t"].values  if "t" in buys.columns  else buys["step"].values
-            t_sell = sells["t"].values if "t" in sells.columns else sells["step"].values
-            ax1.scatter(t_buy,  buys["price"],  marker="^", s=18,
-                        color=_BID, zorder=5, label=f"Client buy fills ({len(buys):,})")
-            ax1.scatter(t_sell, sells["price"], marker="v", s=18,
-                        color=_ASK, zorder=5, label=f"Client sell fills ({len(sells):,})")
+            _MAX_FILL_PTS = 400
+            def _subsample(df, n):
+                if len(df) <= n:
+                    return df
+                idx = np.linspace(0, len(df) - 1, n, dtype=int)
+                return df.iloc[idx]
+            buys_s  = _subsample(buys,  _MAX_FILL_PTS // 2)
+            sells_s = _subsample(sells, _MAX_FILL_PTS // 2)
+            t_buy  = buys_s["t"].values  if "t" in buys_s.columns  else buys_s["step"].values
+            t_sell = sells_s["t"].values if "t" in sells_s.columns else sells_s["step"].values
+            ax1.scatter(t_buy,  buys_s["price"],  marker="^", s=14,
+                        color=_BID, zorder=5, alpha=0.7,
+                        label=f"Buy fills ({len(buys):,} total, {len(buys_s)} shown)")
+            ax1.scatter(t_sell, sells_s["price"], marker="v", s=14,
+                        color=_ASK, zorder=5, alpha=0.7,
+                        label=f"Sell fills ({len(sells):,} total, {len(sells_s)} shown)")
 
-        # hedge markers
         _vlines(ax1, self.hedge_t, label=f"Hedge ({len(self.hedge_steps)} events)")
         _ax_style(ax1, ylabel="Price", title="Price path  •  fills  •  hedges")
         ax1.legend(loc="upper left", fontsize=7.5, ncol=3)
 
         # ── Panel 2: Inventory ──────────────────────────────────────────────
         inv = sl["inventory"].values
-        inv_usd = inv * sl["fair_mid"].values
         ax2.plot(t, inv / 1e3, color=_INV, lw=0.9, label="Inventory (kEUR)")
         ax2.axhline( self.limit / 1e3, color=_ASK, lw=1, ls="--",
                     label=f"Hedge trigger ±{self.limit/1e3:.0f} kEUR")
@@ -274,18 +282,19 @@ class DiagnosticsReport:
         ax2.plot(t, ask_offset, color=_ASK, lw=0.7, label="Ask offset from fair (bps)")
         ax2.plot(t, bid_offset, color=_BID, lw=0.7, label="Bid offset from fair (bps)")
         ax2.fill_between(t, bid_offset, ask_offset, alpha=0.1, color=_SPR)
+        _vlines(ax2, self.hedge_t)
         ax2.axhline(float(np.nanmean(ask_offset)), color=_ASK, lw=1, ls=":",
                     label=f"mean ask = {np.nanmean(ask_offset):.2f} bps")
         ax2.axhline(float(np.nanmean(bid_offset)), color=_BID, lw=1, ls=":",
                     label=f"mean bid = {np.nanmean(bid_offset):.2f} bps")
-        _vlines(ax2, self.hedge_t)
         _ax_style(ax2, ylabel="bps from fair_mid",
-                  title="Ask & bid leg distance from fair_mid  —  symmetric = no skew, diverging = inventory pressure")
+                  title="Ask & bid offsets from fair_mid  —  symmetric = no skew, diverging = inventory pressure")
         ax2.legend(fontsize=7.5, ncol=2)
         ax2.text(0.01, 0.03,
-                 "Each leg's distance from fair_mid in bps.  Equal legs = neutral.  "
-                 "Ask > bid → long inventory pushing ask up.  "
-                 "Skew is driven by alpha_spread × inventory.",
+                 "ask_offset = (ask − fair_mid) / fair_mid × 10⁴  →  how many bps your ask sits above the fair price.\n"
+                 "bid_offset = (fair_mid − bid) / fair_mid × 10⁴  →  how many bps your bid sits below the fair price.\n"
+                 "Equal offsets = symmetric quote.  ask > bid → ask is pushed up (long inventory, MM wants to sell)."
+                 "  bid > ask → bid pushed up (short inventory, MM wants to buy).",
                  transform=ax2.transAxes, ha="left", va="bottom",
                  fontsize=6.5, color=_REF, style="italic")
 
@@ -349,9 +358,9 @@ class DiagnosticsReport:
                   title="Rolling fill rate  (10-min window)  vs theoretical λ")
         ax1.legend(fontsize=7.5)
         ax1.text(0.01, 0.97,
-                 "How many client orders fill per second, averaged over 10 min.\n"
-                 "Should track the dashed theoretical λ = A·exp(−k·δ).  "
-                 "Persistent gap → spread too wide (below λ) or too tight (above λ).",
+                 "Number of client orders matched per second, averaged over a rolling 10-min window.\n"
+                 "Dashed line = theoretical λ = A·exp(−k·δ): the fill rate predicted by the calibrated order-arrival model at the current mean spread.\n"
+                 "Persistent gap below λ → spread too wide, clients not reaching your quotes.  Gap above λ → spread too tight, you are filled too aggressively.",
                  transform=ax1.transAxes, ha="left", va="top",
                  fontsize=6.5, color=_REF, style="italic")
 
@@ -381,7 +390,7 @@ class DiagnosticsReport:
             ax3.fill_between(mf2[t_col].values, 0, roll_imb.values,
                              where=roll_imb < 0, color=_ASK, alpha=0.2)
             ax3.axhline(0, color=_REF, lw=0.8)
-            _vlines(ax3, self.hedge_t)
+        _vlines(ax3, self.hedge_t)
         _ax_style(ax3, xlabel="Time (s)", ylabel="Imbalance",
                   title="Order-flow imbalance  (50-fill rolling)  — should mean-revert around 0")
         if len(mf):
@@ -413,125 +422,41 @@ class DiagnosticsReport:
         plt.tight_layout()
         plt.show()
 
-    # ── Figure 4: Hedge Events ─────────────────────────────────────────────────
+    # ── Figure 4: Hedge Summary ────────────────────────────────────────────────
 
     def plot_hedges(self):
-        """Deep dive on each hedge event."""
-        sl     = self.sl
-        hsteps = sorted(self.hedge_steps)
-        dt     = self.ctrl.market_B.stock.time_step
-        t_col  = "t" if "t" in sl.columns else "step"
-        window = max(1, int(1800 / dt))   # ±30-min context window around hedge
+        """Single-chart hedge summary: inventory path + trigger + event markers."""
+        sl    = self.sl
+        t_col = "t" if "t" in sl.columns else "step"
+        t     = sl[t_col].values
+        inv   = sl["inventory"].values
 
-        if len(hsteps) == 0:
-            fig = _fig("Hedge Events — None triggered", figsize=(10, 3))
-            ax  = fig.add_subplot(111)
+        fig = _fig("Hedge Summary", figsize=(14, 4))
+        ax  = fig.add_subplot(111)
+
+        ax.plot(t, inv / 1e3, color=_INV, lw=0.9, label="Inventory (kEUR)")
+        ax.axhline( self.limit / 1e3, color=_ASK, lw=1, ls="--",
+                   label=f"Trigger ±{self.limit/1e3:.0f} kEUR")
+        ax.axhline(-self.limit / 1e3, color=_ASK, lw=1, ls="--")
+        ax.axhline(0, color=_REF, lw=0.6)
+
+        if len(self.hedge_steps):
+            # Mark each hedge event with a vertical line + numbered label
+            for i, hs_t in enumerate(self.hedge_t):
+                ax.axvline(hs_t, color=_HED, lw=1.2, ls="--",
+                           alpha=0.8, label="Hedge" if i == 0 else None)
+                ax.text(hs_t, ax.get_ylim()[1] if ax.get_ylim()[1] != 1.0 else self.limit * 1.1 / 1e3,
+                        f" H{i+1}", color=_HED, fontsize=7, va="top")
+        else:
             max_util = float((sl["inventory"].abs() * sl["fair_mid"]).max())
             ax.text(0.5, 0.5,
-                    f"No hedges fired during this simulation.\n"
-                    f"Max |inventory × mid| = ${max_util:,.0f}   "
-                    f"(trigger = ${self.limit:,.0f} = {self.cfg.delta_limit:.0%} × K/2)\n"
-                    f"Inventory stayed at {max_util/self.limit*100:.1f}% of the limit.",
+                    f"No hedges triggered  —  max |inv × mid| = {max_util/self.limit*100:.1f}% of limit",
                     transform=ax.transAxes, ha="center", va="center",
-                    fontsize=11, color=_TXT,
-                    bbox=dict(boxstyle="round", facecolor=_AX, edgecolor=_HED))
-            ax.axis("off")
-            plt.tight_layout()
-            plt.show()
-            return
+                    fontsize=10, color=_TXT, style="italic")
 
-        # Summary bar chart + context windows
-        n_hedges = len(hsteps)
-        ncols = min(n_hedges, 3)
-        nrows = 1 + (n_hedges + ncols - 1) // ncols
-        fig = _fig(f"Hedge Events  ({n_hedges} total)", figsize=(14, 3.5 * nrows))
-        gs  = gridspec.GridSpec(nrows, ncols, figure=fig,
-                                hspace=0.55, wspace=0.35)
-
-        # ── Row 0: inventory at each hedge ─────────────────────────────────
-        ax_sum = fig.add_subplot(gs[0, :])
-        hedge_inv = []
-        for hs in hsteps:
-            row = sl[sl["step"] <= hs].iloc[-1]
-            hedge_inv.append(abs(row["inventory"] * row["fair_mid"]))
-
-        colors = [_ASK if v > self.limit else _SPR for v in hedge_inv]
-        bars = ax_sum.bar(range(n_hedges),
-                          [v / 1e3 for v in hedge_inv],
-                          color=colors, edgecolor=_BG)
-        ax_sum.axhline(self.limit / 1e3, color=_ASK, lw=1.5, ls="--",
-                       label=f"Trigger ${self.limit/1e3:.0f}k")
-        for i, bar in enumerate(bars):
-            ax_sum.text(bar.get_x() + bar.get_width() / 2,
-                        bar.get_height() + 0.5,
-                        f"H{i+1}", ha="center", va="bottom",
-                        fontsize=8, color=_TXT)
-        _ax_style(ax_sum, xlabel="Hedge #",
-                  ylabel="|inv × mid|  ($k)",
-                  title="Inventory notional (USD) at each hedge trigger")
-        ax_sum.legend(fontsize=8)
-
-        # ── Context windows ─────────────────────────────────────────────────
-        # Each panel shows ±5 min around the hedge: inventory (left axis),
-        # mid price (right axis), and any fills that happened in that window.
-        window_tight = max(1, int(300 / dt))   # ±5-min window (tighter = more dynamics visible)
-        for i, hs in enumerate(hsteps):
-            row_i = 1 + i // ncols
-            col_i = i % ncols
-            ax = fig.add_subplot(gs[row_i, col_i])
-
-            lo = max(0, hs - window_tight)
-            hi = min(len(sl) - 1, hs + window_tight)
-            chunk = sl.iloc[lo:hi]
-            tc    = chunk[t_col].values
-            inv_c = chunk["inventory"].values
-
-            # Inventory (left axis)
-            ax.plot(tc, inv_c / 1e3, color=_INV, lw=1.1, label="Inv (kEUR)")
-            ax.axhline( self.limit / 1e3, color=_ASK, lw=0.8, ls="--")
-            ax.axhline(-self.limit / 1e3, color=_ASK, lw=0.8, ls="--")
-            ax.axhline(0, color=_REF, lw=0.5)
-
-            # Mid price (right axis)
-            axr = ax.twinx()
-            axr.plot(tc, chunk["fair_mid"].values, color=_MID, lw=0.7,
-                     alpha=0.7, label="Fair mid")
-            axr.set_ylabel("Price", color=_MID, fontsize=7)
-            axr.tick_params(colors=_MID, labelsize=6)
-            axr.set_facecolor(_AX)
-
-            # Fills in this window
-            hs_t = float(sl[sl["step"] == hs][t_col].iloc[0]) if len(sl[sl["step"] == hs]) else float(hs)
-            t_lo_w = tc[0] if len(tc) else hs_t - 300
-            t_hi_w = tc[-1] if len(tc) else hs_t + 300
-            t_fill_col = "t" if "t" in self.mm_fills.columns else "step"
-            fills_win = self.mm_fills[
-                (self.mm_fills[t_fill_col] >= t_lo_w) &
-                (self.mm_fills[t_fill_col] <= t_hi_w)
-            ]
-            if len(fills_win):
-                f_buys  = fills_win[fills_win["direction"] == "buy"]
-                f_sells = fills_win[fills_win["direction"] == "sell"]
-                if len(f_buys):
-                    ax.scatter(f_buys[t_fill_col], f_buys["size"] * 0 + self.limit * 0.02 / 1e3,
-                               marker="^", s=22, color=_BID, zorder=4, alpha=0.8)
-                if len(f_sells):
-                    ax.scatter(f_sells[t_fill_col], f_sells["size"] * 0 - self.limit * 0.02 / 1e3,
-                               marker="v", s=22, color=_ASK, zorder=4, alpha=0.8)
-
-            # Hedge moment vertical line
-            ax.axvline(hs_t, color=_HED, lw=1.5, ls="--")
-
-            idx = np.searchsorted(chunk["step"].values, hs, side="right") - 1
-            if 0 <= idx < len(inv_c):
-                inv_at = inv_c[idx]
-                ax.text(0.97, 0.95, f"inv={inv_at/1e3:+.1f}k",
-                        transform=ax.transAxes, ha="right", va="top",
-                        fontsize=7.5, color=_HED)
-
-            _ax_style(ax, xlabel="Time (s)", ylabel="kEUR",
-                      title=f"Hedge {i+1}  (±5 min)\ninv (purple) · price (blue) · fills (▲▼)")
-
+        _ax_style(ax, xlabel="Time (s)", ylabel="kEUR",
+                  title=f"Inventory path  •  hedge trigger  •  {len(self.hedge_steps)} hedge event(s)")
+        ax.legend(fontsize=8, loc="upper left")
         plt.tight_layout()
         plt.show()
 
