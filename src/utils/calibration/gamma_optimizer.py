@@ -31,6 +31,7 @@ class GammaOptimizer:
         size_params: dict,
         vol_params: dict,
     ) -> None:
+        """Pre-compute realised vol and expected order size from Phase 1 data."""
         self._dt = dt
         self._mid_prices = mid_prices
         self._arrival = arrival_params

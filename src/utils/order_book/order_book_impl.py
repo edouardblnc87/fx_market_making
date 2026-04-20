@@ -1,3 +1,5 @@
+"""Order book implementation: Order and Order_book classes with price-time priority matching."""
+
 import random
 import numpy as np
 import pandas as pd
@@ -11,6 +13,7 @@ from scipy.stats import truncnorm
 _id_counter: int = 0
 
 def _generate_order_id() -> str:
+    """Increment the global counter and return the next order ID as a string."""
     global _id_counter
     _id_counter += 1
     return str(_id_counter)
@@ -21,8 +24,10 @@ def generate_order_id() -> str:
 
 
 class Order:
+    """Represents a single limit or market order resting in or routed through the book."""
 
     def __init__(self, id, direction, price, size, type, origin="market_maker", level=0):
+        """Store order fields; direction must be 'buy' or 'sell'."""
         self._id        = id
         self._direction = direction
         self._price     = price
@@ -33,6 +38,7 @@ class Order:
 
     @property
     def _dict_repr(self):
+        """Return the order fields as a plain dict."""
         return {
             "Id":        self._id,
             "Direction": self._direction,
@@ -45,8 +51,10 @@ class Order:
 
 
 class Order_book:
+    """Limit order book with separate MM and client queues and price-time priority matching."""
 
     def __init__(self, spread_init: float = 0.1, n_levels: int = 10, track_submissions: bool = False):
+        """Initialise the order book with separate MM and client queues and an empty match log."""
         self._spread_init   = spread_init
         self.n_levels       = n_levels
 
@@ -81,6 +89,7 @@ class Order_book:
 
     @property
     def _df_order_book(self) -> pd.DataFrame:
+        """Return all resting orders (MM + client) as a DataFrame."""
         combined = {**self._orders, **self._client_orders}
         if not combined:
             return pd.DataFrame(columns=["Id", "Direction", "Price", "Size",
@@ -98,16 +107,19 @@ class Order_book:
 
     @property
     def _df_bid_book(self) -> pd.DataFrame:
+        """Return the buy-side of the order book as a DataFrame."""
         df = self._df_order_book
         return df[df["Direction"] == "buy"].drop(columns=["Direction"])
 
     @property
     def _df_ask_book(self) -> pd.DataFrame:
+        """Return the sell-side of the order book as a DataFrame."""
         df = self._df_order_book
         return df[df["Direction"] == "sell"].drop(columns=["Direction"])
 
     @property
     def _df_matches(self) -> pd.DataFrame:
+        """Return the match log as a DataFrame."""
         if not self._match_log:
             return pd.DataFrame(columns=["MatchId", "ClientOrderId", "MmOrderId",
                                          "Direction", "Price", "MatchedSize",
@@ -125,21 +137,26 @@ class Order_book:
     # ── Core interface ────────────────────────────────────────────────────────
 
     def register_quoter_listener(self, callback) -> None:
+        """Register the MM fill callback invoked on every MM order fill."""
         self._fill_callback = callback
 
     def register_hft_listener(self, callback) -> None:
+        """Register the HFT fill callback invoked on every HFT order fill."""
         self._hft_fill_callback = callback
 
     def tick(self, step: int) -> None:
+        """Advance the book clock to the given step (used for order age tracking)."""
         self._current_step = step
         # Age is computed on demand: step - entry["post_step"] (no loop needed)
 
     @property
     def mm_resting_orders(self) -> dict:
+        """Live dict of resting MM orders — callers must not mutate it."""
         # Return live dict directly — callers must not mutate it.
         return self._mm_resting
 
     def add_order(self, order: Order) -> None:
+        """Add an order to the book, routing it to the MM or client queue by origin."""
         self._seq += 1
         entry = {
             "direction": order._direction,
@@ -180,6 +197,7 @@ class Order_book:
             self._client_orders[order._id] = entry
 
     def cancel_orders(self, ids: list) -> None:
+        """Cancel MM orders by ID and remove them from the resting registry."""
         if not ids:
             return
         for oid in ids:
@@ -188,15 +206,18 @@ class Order_book:
         self._mm_dirty = True
 
     def cancel_all_mm_orders(self) -> None:
+        """Remove every resting MM order from the book."""
         self._orders.clear()
         self._mm_resting.clear()
         self._mm_dirty = True
 
     def post_mm_quotes(self, quotes: list) -> None:
+        """Add a batch of MM quote orders to the book."""
         for order in quotes:
             self.add_order(order)
 
     def route_client_order(self, order: Order) -> None:
+        """Add a client order then immediately run matching."""
         self.add_order(order)
         self.try_clear()
 
@@ -317,6 +338,7 @@ class Order_book:
 
     def _fire_fill(self, order_id, direction, price, size, level, is_full_fill,
                    origin: str = "market_maker") -> None:
+        """Build a FillEvent and route it to the appropriate registered callback."""
         if not is_full_fill and order_id in self._mm_resting:
             self._mm_resting[order_id]["remaining_size"] -= size
 
@@ -340,6 +362,7 @@ class Order_book:
     # ── Display helpers ───────────────────────────────────────────────────────
 
     def __repr__(self):
+        """Return a short summary of resting MM and client order counts."""
         df = self._df_order_book
         n_mm = len(self._orders)
         n_cl = len(self._client_orders)
@@ -351,6 +374,7 @@ class Order_book:
         )
 
     def display_mm_quotes(self) -> None:
+        """Print a formatted ladder of resting MM ask and bid quotes."""
         mm = [(oid, o) for oid, o in self._orders.items() if o["origin"] == "market_maker"]
         if not mm:
             print("No resting MM orders in the book.")
@@ -378,6 +402,7 @@ class Order_book:
     # ── Legacy / random-order helpers (used in exploratory notebooks) ─────────
 
     def generate_price_from_last(self, last_price, mu=1, sigma=0.05, order="buy"):
+        """Sample a new price near last_price using a truncated normal distribution."""
         if order == "buy":
             a, b = -np.inf, (1.1 - mu) / sigma
         else:
@@ -385,12 +410,15 @@ class Order_book:
         return truncnorm.rvs(a, b, loc=mu, scale=sigma) * last_price
 
     def return_last_buy_order(self):
+        """Return the most recently submitted resting buy order."""
         return self._df_bid_book.sort_values(["seq"] if "seq" in self._df_bid_book.columns else []).iloc[-1]
 
     def return_last_sell_order(self):
+        """Return the most recently submitted resting sell order."""
         return self._df_ask_book.sort_values(["seq"] if "seq" in self._df_ask_book.columns else []).iloc[-1]
 
     def _generate_random_order(self, origin="market_maker"):
+        """Generate and add one random order near the current best price."""
         if not self._orders:
             price_buy  = round(np.random.normal(100, 0.02), 4)
             size_buy   = abs(round(np.random.normal(2000, 100)))
@@ -419,10 +447,12 @@ class Order_book:
                                      abs(round(np.random.normal(2000, 100))), order_type, origin))
 
     def _generate_n_random_order(self, number_of_order):
+        """Generate and add number_of_order random orders to seed the book."""
         for _ in tqdm(range(number_of_order), desc="Generating order book"):
             self._generate_random_order()
 
     def generate_random_orders(self, n, origin="market_maker") -> list:
+        """Return a list of n randomly generated Order objects without adding them to the book."""
         if not self._orders:
             raise ValueError("Book is empty — seed with _generate_n_random_order first")
         orders = []
@@ -446,5 +476,6 @@ class Order_book:
         return orders
 
     def _add_orders_batch(self, orders: list):
+        """Add a list of orders to the book one by one with a progress bar."""
         for order in tqdm(orders, desc="Adding orders"):
             self.add_order(order)

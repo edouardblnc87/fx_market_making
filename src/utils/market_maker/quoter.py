@@ -1,3 +1,5 @@
+"""Avellaneda-Stoikov market maker quoter with inventory management and hedge execution."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -27,6 +29,8 @@ _SESSION_K_MULTIPLIERS = {
 
 @dataclass
 class QuoterConfig:
+    """All tunable parameters for the Avellaneda-Stoikov market maker."""
+
     # Avellaneda-Stoikov core
     gamma: float = 0.1
     k: float = 0.3
@@ -118,6 +122,7 @@ class Quoter:
     """
 
     def __init__(self, market_B: Market, market_C: Market, config: QuoterConfig | None = None, capital_K: float = 1_000_000.0):
+        """Initialise the Quoter with reference markets, optional config, and total capital."""
         self.market_B = market_B
         self.market_C = market_C
         self.cfg = config if config is not None else QuoterConfig()
@@ -599,6 +604,7 @@ class Quoter:
         return size_B, size_C, fee_cost
 
     def fill_cost(self, size: float, fair_mid: float) -> float:
+        """Return the maker fee cost in USD for a fill of given size at fair_mid."""
         return abs(size) * self.cfg.fee_A_maker * fair_mid
 
     def execute_hedge(self, step: int, t: float) -> bool:
@@ -708,6 +714,7 @@ class Quoter:
     #  DIAGNOSTICS
 
     def snapshot(self, step: int, t: float) -> dict:
+        """Return a dict of current quote, spread, and inventory diagnostics at the given step."""
         bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
         bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
         best_bid_ref = max(bid_B, bid_C)
@@ -896,6 +903,7 @@ class Quoter:
         return float(self._precomp_vol[min(step, len(self._precomp_vol) - 1)])
 
     def _get_stale_quotes(self, market: Market, step: int, lag: int) -> Tuple[float, float]:
+        """Return (bid, ask) from the given market at the lag-adjusted step."""
         stale_step = max(0, step - lag)
         return float(market.bid_price[stale_step]), float(market.ask_price[stale_step])
 
@@ -912,5 +920,6 @@ class Quoter:
         return (self._imbalance_n_sells - self._imbalance_n_buys) / total
 
     def _snap_to_tick(self, price: float) -> float:
+        """Round price to the nearest tick and return it rounded to 6 decimal places."""
         tick = self.cfg.tick_size
         return round(round(price / tick) * tick, 6)

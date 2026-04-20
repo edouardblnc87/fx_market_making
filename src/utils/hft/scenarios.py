@@ -1,3 +1,5 @@
+"""HFT state definitions, scenario configurations, and schedule helpers."""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -6,6 +8,8 @@ from .hft_config import HFTConfig
 
 
 class HFTState(IntEnum):
+    """Enum representing the four operational states of the HFT agent."""
+
     ACTIVE        = 0
     ONE_SIDED_BID = 1  # only quoting bids (inventory too short, need to buy)
     ONE_SIDED_ASK = 2  # only quoting asks (inventory too long, need to sell)
@@ -14,6 +18,7 @@ class HFTState(IntEnum):
 
 @dataclass
 class ScheduledEvent:
+    """A time window during which the HFT agent is forced into a specific state."""
     start_day:     float
     duration_days: float
     state:         HFTState

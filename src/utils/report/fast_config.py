@@ -1,3 +1,5 @@
+"""Factory helpers for quickly building standard Market B/C instances and demo simulation components."""
+
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from ..market_simulator import Market
@@ -8,6 +10,7 @@ from ..client_flow.flow_generator import ClientFlowGenerator
 from .controller import Controller
 
 def _build_market_B(stock, seed=42):
+    """Build Market B with a skewed vol-adaptive spread and depth array."""
     dt = stock.time_step
     np.random.seed(seed)
     m = Market(stock=stock)
@@ -23,6 +26,7 @@ def _build_market_B(stock, seed=42):
     return m
 
 def _build_market_C(stock, seed=43):
+    """Build Market C with an adaptive vol-based spread and depth array."""
     dt = stock.time_step
     np.random.seed(seed)
     m = Market(stock=stock)
@@ -33,6 +37,7 @@ def _build_market_C(stock, seed=43):
     return m
 
 def build_markets_B_C(stock):
+    """Build Market B and Market C in parallel and return them as a tuple."""
     with ThreadPoolExecutor(max_workers=2) as pool:
         fb = pool.submit(_build_market_B, stock, seed=42)
         fc = pool.submit(_build_market_C, stock, seed=43)
@@ -41,6 +46,7 @@ def build_markets_B_C(stock):
     return market_B, market_C
 
 def get_standard_demo_config():
+    """Return a QuoterConfig tuned for the standard demo run."""
     return QuoterConfig(
         gamma=0.01,                              # wider spread (~9 bps) → net edge above fees
         requote_threshold_spread_fraction=0.25,
@@ -52,6 +58,7 @@ def get_standard_demo_config():
 
 CAPITAL = 1_000_000
 def build_market_maker_and_order_book(market_1, market_2):
+    """Instantiate a Quoter and Order_book wired together and return (quoter, book)."""
     book = Order_book()
     demo_mm = Quoter(market_1, market_2, config=get_standard_demo_config(), capital_K=CAPITAL)
     book.register_quoter_listener(demo_mm.on_fill)
@@ -60,12 +67,15 @@ def build_market_maker_and_order_book(market_1, market_2):
 class _ClientFlowFn:
     """Picklable wrapper around ClientFlowGenerator so sessions can be saved."""
     def __init__(self, seed):
+        """Initialise the wrapped ClientFlowGenerator with the given random seed."""
         self._gen = ClientFlowGenerator(seed=seed)
 
     def __call__(self, step, t, mid, bid, ask, dt):
+        """Generate client orders for one simulation step."""
         return self._gen.generate_step(mid_price=mid, best_bid=bid, best_ask=ask, dt=dt)
 
 
 def build_controller(market_1, market_2, book, marmet_maker, seed=44):
+    """Wire up a Controller with a seeded ClientFlowGenerator and return it."""
     client_flow_fn = _ClientFlowFn(seed=seed)
     return Controller(market_1, market_2, book, marmet_maker, client_flow_fn)

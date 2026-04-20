@@ -1,2 +1,4 @@
+"""Trading calendar constants for a 24/5 FX market."""
+
 TRADING_SECONDS_PER_DAY  = 24 * 3_600          # open 24/5
 TRADING_SECONDS_PER_YEAR = 252 * TRADING_SECONDS_PER_DAY  # ~7.26M s

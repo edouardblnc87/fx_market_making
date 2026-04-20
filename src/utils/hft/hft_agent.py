@@ -1,3 +1,5 @@
+"""HFT market-making agent that quotes tighter than the MM and manages adverse selection via a state machine."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -45,6 +47,7 @@ class HFTAgent:
         weight_B: float = 0.75,
         weight_C: float = 0.25,
     ) -> None:
+        """Initialise the HFT agent, precompute constants, and set up the EWMA vol tracker."""
         self.cfg        = config
         self._market_B  = market_B
         self._market_C  = market_C
@@ -160,12 +163,14 @@ class HFTAgent:
 
     @property
     def fill_history(self):
+        """Return the HFT fill history as a DataFrame."""
         import pandas as pd
         return pd.DataFrame(self._fill_history)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _update_state(self, t: float, step: int, stale_now: int, spread_AS_bps: float) -> None:
+        """Evaluate schedule, profitability, vol, and trend to set the HFT state for this step."""
         # Schedule override takes priority
         day = t / 86_400.0
         for event in self._schedule:
@@ -217,6 +222,7 @@ class HFTAgent:
         self.state = HFTState.ACTIVE
 
     def _update_vol(self, step: int) -> None:
+        """Update the incremental EWMA variance and annualised vol estimate for this step."""
         try:
             p1 = float(self._market_B.noised_mid_price[step])
         except (IndexError, AttributeError):
@@ -235,4 +241,5 @@ class HFTAgent:
             self._sigma = max(np.sqrt(self._ewma_var * self._inv_dt_frac), 1e-6)
 
     def _snap(self, price: float) -> float:
+        """Round price to the nearest tick."""
         return round(round(price * self._inv_tick) * TICK_SIZE, 6)

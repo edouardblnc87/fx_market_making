@@ -1,6 +1,5 @@
-def main():
-    print("Hello from projet-market-making!")
-
+import sys
+from app.main import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

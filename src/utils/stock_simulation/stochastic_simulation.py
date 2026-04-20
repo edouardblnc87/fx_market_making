@@ -1,3 +1,5 @@
+"""Stochastic price path generators: GBM, Heston, and GARCH(1,1) with optional jumps."""
+
 import numpy as np
 from .config import *
 

@@ -1,3 +1,5 @@
+"""P&L tracker: static methods for computing, decomposing, and plotting market-making P&L."""
+
 from __future__ import annotations
 
 import numpy as np

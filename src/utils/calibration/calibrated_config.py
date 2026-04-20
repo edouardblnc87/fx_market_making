@@ -62,6 +62,7 @@ class CalibratedConfigBuilder:
     """
 
     def __init__(self, controller) -> None:
+        """Store the Phase 1 controller for use in calibration pipeline."""
         self._ctrl = controller
         self.diagnostics: dict = {}
 

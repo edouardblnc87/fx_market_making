@@ -1,0 +1,403 @@
+\documentclass[12pt,a4paper]{article}
+
+% ── Encoding & fonts ──────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% ── Page layout ───────────────────────────────────────────────────────────────
+\usepackage[top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+
+% ── Math ──────────────────────────────────────────────────────────────────────
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% ── Figures & tables ──────────────────────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{booktabs}
+\usepackage{array}
+
+% ── Code listings ─────────────────────────────────────────────────────────────
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{gray!10},
+  frame=single,
+  rulecolor=\color{gray!40},
+  breaklines=true,
+  breakatwhitespace=true,
+  showstringspaces=false,
+  tabsize=2,
+}
+
+% ── References & links ────────────────────────────────────────────────────────
+\usepackage[colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue]{hyperref}
+
+% ── Misc ──────────────────────────────────────────────────────────────────────
+\usepackage{nicefrac}
+\usepackage{enumitem}
+\usepackage{parskip}
+
+% ── Section styling ───────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries}{}{0em}{}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{\textbf{FX Market Making --- EUR/USD Simulation\\[6pt]
+       \large User Guide}}
+
+\author{
+  Edouard Blanc \quad Cl\'ement Dardare \quad Julien Simeoni \\[4pt]
+  \small Paris Dauphine University --- MSc 203
+}
+
+\date{April 2026}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{Project Overview}
+% =============================================================================
+
+This repository contains a full simulation of a market-maker (MM) operating on
+the EUR/USD pair. The project models the complete MM lifecycle: price path
+generation, order book management, client order flow, P\&L tracking, parameter
+calibration, and competition against HFT agents.
+
+\subsection*{Market architecture}
+
+\begin{itemize}
+  \item \textbf{Exchange A} --- the MM's own venue. It posts bid/ask quotes on a
+        multi-level order book and earns the spread on client fills.
+  \item \textbf{Market B} --- a reference market with a wide spread
+        (75\% vol weight, 200\,ms refresh). Used for hedging large inventory positions.
+  \item \textbf{Market C} --- a fast reference market with a tight spread
+        (25\% vol weight, 170\,ms refresh). Used for urgent hedges.
+  \item \textbf{Client flow} --- a Poisson-driven stream of market orders whose
+        size and direction depend on the mid price, spread, and time of day.
+  \item \textbf{HFT agents} (Phase 3) --- high-frequency traders competing for
+        fills on exchange A, following a realistic intraday activity schedule.
+\end{itemize}
+
+\subsection*{Simulation phases}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Phase} & \textbf{Config} & \textbf{Stock path} & \textbf{Purpose} \\
+\midrule
+Phase 1            & Heuristic \texttt{QuoterConfig}    & Seed    & Baseline with default parameters \\
+Calibration        & ---                                 & ---     & Fit MM parameters from Phase 1 data \\
+Phase 1 Calibrated & Calibrated config                  & Same seed & Before/after comparison \\
+Phase 2            & Calibrated config                  & Seed P2 & Out-of-sample test \\
+Phase 3            & Calibrated config + HFT            & Seed P2 & Full competitive environment \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =============================================================================
+\section{Installation}
+% =============================================================================
+
+Python 3.12 is required. All dependencies are managed with \texttt{uv}.
+
+\begin{lstlisting}[language=bash]
+pip install uv          # install uv if not already present
+uv sync                 # install all project dependencies
+pip install PySide6     # required for the desktop app
+\end{lstlisting}
+
+% =============================================================================
+\section{How to Run}
+% =============================================================================
+
+There are two ways to run the full simulation pipeline.
+
+\subsection{Option A --- Desktop App (recommended)}
+
+A full GUI with parameter controls, live progress bars, and interactive tabbed
+result windows for each phase.
+
+\begin{lstlisting}[language=bash]
+python3.12 main.py
+\end{lstlisting}
+
+\noindent See Section~\ref{sec:app} for the complete app workflow.
+
+\subsection{Option B --- Standalone Script}
+
+A terminal script that runs the exact same pipeline sequentially. It pauses
+between phases so you can review results before continuing. Edit the parameters
+block at the top of the file before running.
+
+\begin{lstlisting}[language=bash]
+python3.12 run_simulation.py
+\end{lstlisting}
+
+\noindent See Section~\ref{sec:script} for details on configuring the script.
+
+% =============================================================================
+\section{Desktop App Workflow}
+\label{sec:app}
+% =============================================================================
+
+\subsection*{Parameters}
+
+Set all parameters before running. They are read at the moment each button is clicked.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Description} & \textbf{Default} \\
+\midrule
+Model       & Price process: \texttt{GARCH}, \texttt{GBM}, or \texttt{Heston} & GARCH \\
+Seed        & Stock path seed for Phase 1 and Comparison & 32 \\
+Seed P2     & Stock path seed for Phase 2 and Phase 3 & 99 \\
+N Days      & Simulation duration for Phase 1 \& Comparison (days) & 30 \\
+DT (s)      & Time step for Phase 1 \& Comparison (seconds) & 0.1 \\
+N Days P2   & Simulation duration for Phase 2 \& 3 (days) & 15 \\
+DT P2 (s)   & Time step for Phase 2 \& 3 --- finer grid for HFT & 0.05 \\
+Vol         & Annualised volatility & 0.07 \\
+Origin      & Starting EUR/USD price & 1.10 \\
+Capital K   & Market-maker capital (EUR/USD) & 1\,000\,000 \\
+Quote size  & EUR notional per side per HFT agent (Phase 3) & 2\,000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+GARCH fields ($\alpha$, $\beta$, $\lambda$, $\sigma_J$) and Heston fields
+($\kappa$, $\theta$, $\xi$, $\rho$) appear automatically when the corresponding
+model is selected.
+
+\subsection*{Step-by-step workflow}
+
+Buttons are greyed out until their prerequisites are met. Follow the steps in order.
+
+\medskip
+\noindent\textbf{Step 1 --- Simulate Stock}\\
+Simulates the EUR/USD price path with the chosen model and Seed.
+
+\medskip
+\noindent\textbf{Step 2 --- Build Markets}\\
+Constructs Markets B and C (spread arrays, depth levels) from the simulated
+stock. Required before running any phase.
+
+\medskip
+\noindent\textbf{Step 3 --- Run Phase 1}\\
+Runs the market-maker with the heuristic \texttt{QuoterConfig} on the stock
+path from Seed. Opens a result window with the backtesting report and all
+diagnostic figures.
+
+\medskip
+\noindent\textbf{Step 4 --- Run Calibration}\\
+Fits a \texttt{QuoterConfig} from Phase 1 data. Opens a Calibration Summary
+window showing all calibrated parameter values. \textit{Requires Phase 1.}
+
+\medskip
+\noindent\textbf{Step 5 --- Phase 1 Calibrated --- Compare}\\
+Re-runs the market-maker on the exact same stock path (Seed) with the calibrated
+config. Direct before/after comparison: identical market conditions, updated
+quoting parameters. \textit{Requires Calibration.}
+
+\medskip
+\noindent\textbf{Step 6 --- Run Phase 2}\\
+Runs the market-maker with the calibrated config on a fresh stock path (Seed P2),
+at the finer time grid (DT P2, N Days P2). Out-of-sample test.
+
+\medskip
+\noindent\textbf{Step 7 --- Run Phase 3 (HFT)}\\
+Same as Phase 2 but adds HFT agents with a realistic intraday activity schedule.
+HFT agents post quotes on both sides at the configured quote size.
+
+\subsection*{Result windows}
+
+Each phase opens an independent tabbed window:
+\begin{itemize}
+  \item \textbf{Report} --- full backtesting text (scrollable, monospace font).
+  \item \textbf{Figure 1\ldots N} --- each figure in a scrollable canvas with the
+        matplotlib toolbar (zoom, pan, save).
+  \item \textbf{Last figure} --- \texttt{QuoterConfig} parameter summary.
+\end{itemize}
+
+Multiple windows can be open simultaneously and closed independently.
+
+% =============================================================================
+\section{Standalone Script Configuration}
+\label{sec:script}
+% =============================================================================
+
+Edit the parameters block at the top of \texttt{run\_simulation.py}:
+
+\begin{lstlisting}[language=Python]
+MODEL     = "GARCH"   # "GARCH" | "GBM" | "Heston"
+SEED      = 32        # stock seed for Phase 1 and Comparison
+SEED_P2   = 99        # stock seed for Phase 2 & 3
+
+N_DAYS    = 30        # days for Phase 1 & Calibrated Comparison
+DT_SEC    = 0.1       # time step for Phase 1 & Comparison (seconds)
+N_DAYS_P2 = 15        # days for Phase 2 & 3
+DT_SEC_P2 = 0.05      # time step for Phase 2 & 3 (seconds)
+
+VOL      = 0.07
+ORIGIN   = 1.10
+CAPITAL  = 1_000_000
+
+# Toggle individual phases on/off
+RUN_PHASE1            = True
+RUN_CALIBRATION       = True
+RUN_PHASE1_CALIBRATED = True
+RUN_PHASE2            = True
+RUN_PHASE3_HFT        = True
+\end{lstlisting}
+
+The script pauses between phases with a \textit{Continue} dialog, allowing you
+to inspect each result window before proceeding. All windows stay open until you
+close them at the end.
+
+% =============================================================================
+\section{Simulation Pipeline}
+% =============================================================================
+
+\subsection*{Step 1 --- Price path simulation}
+
+A EUR/USD mid price is generated using one of three models:
+
+\begin{itemize}
+  \item \textbf{GBM} --- Geometric Brownian Motion. Log-normal diffusion with
+        constant volatility.
+  \item \textbf{Heston} --- Stochastic volatility. Mean-reverting variance
+        process; captures vol clustering without jumps.
+  \item \textbf{GARCH} --- GARCH(1,1) with optional jump component. Captures
+        volatility clustering, fat tails, and sudden price shocks.
+\end{itemize}
+
+\subsection*{Step 2 --- Market B \& C construction}
+
+Two reference markets are built from the same price path:
+\begin{itemize}
+  \item \textbf{Market B} --- wider spread (Skew model), deeper book
+        (500\,k EUR mean depth). Used for hedging when inventory is large.
+  \item \textbf{Market C} --- tighter spread (Adaptive model), shallower book
+        (200\,k EUR mean depth). Used for urgent hedges.
+\end{itemize}
+
+\subsection*{Step 3 --- Phase 1 (heuristic quoting)}
+
+The MM runs on exchange A with a default \texttt{QuoterConfig}. At each step,
+\texttt{compute\_quotes()} selects which levels to reprice using a 5-priority
+system. Client orders arrive via a Poisson process; fills update inventory and
+schedule hedges on Markets B or C.
+
+\subsection*{Step 4 --- Calibration}
+
+\texttt{CalibratedConfigBuilder} fits a new \texttt{QuoterConfig} from Phase 1
+data using five independent calibrators run in parallel:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Calibrator} & \textbf{What it fits} \\
+\midrule
+\texttt{VolatilityCalibrator} & EWMA volatility $\to$ dynamic spread width \\
+\texttt{SpreadCalibrator}     & OLS regression $\to$ target half-spread \\
+\texttt{KCalibrator}          & Fill-rate intensity $k$ $\to$ Poisson arrival model \\
+\texttt{StaleCalibrator}      & Stale-quote threshold $\to$ refresh frequency \\
+\texttt{GammaOptimizer}       & Inventory penalty $\gamma$ $\to$ A-S optimal skew \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Step 5 --- Phase 1 Calibrated (comparison)}
+
+The MM runs on the same stock path with the calibrated config. Comparing Phase 1
+and Phase 1 Calibrated on identical conditions isolates the direct impact of
+calibration.
+
+\subsection*{Step 6 --- Phase 2 (out-of-sample)}
+
+The calibrated config is tested on a fresh stock path (Seed P2) at a finer time
+grid ($\Delta t = 0.05\,\text{s}$, 15 days). This is the true out-of-sample
+evaluation.
+
+\subsection*{Step 7 --- Phase 3 (HFT competition)}
+
+HFT agents are added to exchange A. They follow a realistic intraday schedule
+and operate in four states:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{State} & \textbf{Behaviour} \\
+\midrule
+\texttt{ACTIVE}        & Posting competitive quotes on both sides \\
+\texttt{ONE\_SIDED\_BID} & Quoting bids only (inventory squeeze) \\
+\texttt{ONE\_SIDED\_ASK} & Quoting asks only (inventory squeeze) \\
+\texttt{OFFLINE}       & Not quoting (vol spike or connectivity loss) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =============================================================================
+\section{Parameters Reference}
+% =============================================================================
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Description} & \textbf{Default} \\
+\midrule
+\texttt{MODEL}       & Price process                                   & \texttt{GARCH} \\
+\texttt{SEED}        & Stock path seed for Phase 1 and Comparison      & 32 \\
+\texttt{SEED\_P2}    & Stock path seed for Phase 2 and Phase 3         & 99 \\
+\texttt{N\_DAYS}     & Trading days for Phase 1 \& Comparison          & 30 \\
+\texttt{DT\_SEC}     & Time step for Phase 1 \& Comparison (s)         & 0.1 \\
+\texttt{N\_DAYS\_P2} & Trading days for Phase 2 \& 3                   & 15 \\
+\texttt{DT\_SEC\_P2} & Time step for Phase 2 \& 3 (s)                  & 0.05 \\
+\texttt{VOL}         & Annualised volatility                            & 0.07 \\
+\texttt{ORIGIN}      & Starting EUR/USD price                           & 1.10 \\
+\texttt{CAPITAL}     & Market-maker capital K (EUR/USD)                 & 1\,000\,000 \\
+\texttt{HFT\_QUOTE\_SIZE\_EUR} & EUR notional per HFT side (Phase 3)  & 2\,000 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{GARCH parameters (active when \texttt{MODEL = "GARCH"})}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Description} & \textbf{Default} \\
+\midrule
+\texttt{GARCH\_ALPHA}   & ARCH coefficient $\alpha$                         & 0.05 \\
+\texttt{GARCH\_BETA}    & GARCH coefficient $\beta$ (requires $\alpha+\beta<1$) & 0.94 \\
+\texttt{GARCH\_LAM}     & Jump intensity (jumps/year, 0 = no jumps)         & 100 \\
+\texttt{GARCH\_SIGMA\_J}& Jump size standard deviation (log-return)         & 0.005 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Heston parameters (active when \texttt{MODEL = "Heston"})}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Description} & \textbf{Default} \\
+\midrule
+\texttt{HESTON\_KAPPA} & Mean-reversion speed of variance          & 2.0 \\
+\texttt{HESTON\_THETA} & Long-run variance (set to $\sigma^2$)     & 0.0049 \\
+\texttt{HESTON\_XI}    & Volatility of volatility                  & 0.3 \\
+\texttt{HESTON\_RHO}   & Price / variance correlation              & $-0.1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

@@ -1,3 +1,5 @@
+"""Spread utility functions: rolling realized volatility estimator and asymmetric spread evolution."""
+
 import numpy as np
 from ..stock_simulation.config import TRADING_SECONDS_PER_DAY
 

@@ -1,3 +1,5 @@
+"""Simulation controller: runs the step loop, logs state, and generates the backtesting report."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -44,6 +46,7 @@ class Controller:
                  client_flow_fn: Callable,
                  hft: bool = False, hft_config: HFTConfig | None = None,
                  hft_schedule: list | None = None) -> None:
+        """Wire up all simulation components and pre-cache frequently accessed config values."""
         self.market_B = market_B
         self.market_C = market_C
         self.book = book
@@ -290,6 +293,7 @@ class Controller:
         return self.quoter.trade_history
 
     def _current_fair_mid(self) -> float:
+        """Return the most recently logged fair mid price."""
         if self._log_arrays is not None and self._log_ptr > 0:
             return float(self._log_arrays['fair_mid'][self._log_ptr - 1])
         if self._step_log:
