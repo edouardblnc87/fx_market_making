@@ -109,17 +109,10 @@ class Controller:
         self.book.post_mm_quotes(quotes)
         self._n_quotes_posted += len(quotes)
 
-        # Market A best bid/ask from resting MM orders.
-        # Single pass with direct min/max tracking — avoids two list allocations per step.
-        best_bid_A = -1e18
-        best_ask_A = 1e18
-        for v in resting.values():
-            p = v['price']
-            if v['direction'] == 'buy':
-                if p > best_bid_A:
-                    best_bid_A = p
-            elif p < best_ask_A:
-                best_ask_A = p
+        # Market A best bid/ask: compute_quotes caches these on every active
+        # reprice, eliminating the O(n_resting) dict scan on every step.
+        best_bid_A = self.quoter._last_best_bid_A
+        best_ask_A = self.quoter._last_best_ask_A
 
         if best_bid_A > -1e18 and best_ask_A < 1e18:
             mid_A = (best_bid_A + best_ask_A) * 0.5
@@ -430,10 +423,16 @@ class Controller:
         ax.spines['left'].set_color('#444444')
         ax.spines['bottom'].set_color('#444444')
 
-        # Faint price background
-        ax.plot(t, s['mid_A'], color='#555555', linewidth=0.6, zorder=1)
-        ax.plot(t, s['bid_A'], color='#226644', linewidth=0.4, linestyle='--', zorder=1)
-        ax.plot(t, s['ask_A'], color='#662222', linewidth=0.4, linestyle='--', zorder=1)
+        # Clip background to a window centred on the fill time range so it
+        # doesn't swamp the plot with dense lines across the entire session.
+        t_fill_min = float(top['t'].min())
+        t_fill_max = float(top['t'].max())
+        t_span = max(t_fill_max - t_fill_min, 120.0)  # at least 2-min window
+        t_lo = t_fill_min - t_span * 0.5
+        t_hi = t_fill_max + t_span * 0.5
+        mask = (t.values >= t_lo) & (t.values <= t_hi)
+        ax.plot(t[mask], s['mid_A'][mask], color='#666666', linewidth=0.8,
+                zorder=1, label='Mid price (window)')
 
         buys  = top[top['direction'] == 'buy']
         sells = top[top['direction'] == 'sell']
@@ -457,21 +456,29 @@ class Controller:
                        s=_ms(sells['size']), zorder=5, edgecolors='white',
                        linewidths=0.5, label='Sell fill')
 
-        # Annotate each trade: rank, size, spread
+        # Annotate each trade: rank, size, spread — stagger annotations to
+        # reduce overlap by alternating above/below the marker.
         for rank, (_, row) in enumerate(top.iterrows(), 1):
-            offset = 0.00015 if row['direction'] == 'buy' else -0.00015
+            side = 1 if rank % 2 == 0 else -1
+            base_offset = 0.00020 if row['direction'] == 'buy' else -0.00020
+            offset = base_offset * (1 + 0.5 * (rank // 2))
+            va = 'bottom' if offset > 0 else 'top'
             ax.annotate(
                 f"#{rank}  {row['size']/1000:.0f}k EUR\n{row['spread_bps']:.1f} bps",
                 xy=(row['t'], row['price']),
                 xytext=(row['t'], row['price'] + offset),
-                color='white', fontsize=7, ha='center', va='bottom',
+                color='white', fontsize=7, ha='center', va=va,
                 zorder=6,
+                arrowprops=dict(arrowstyle='-', color='#888888',
+                                lw=0.5, shrinkA=0, shrinkB=2),
             )
 
-        # Tight y-axis zoom: price range of fills ± small padding
+        # Tight y-axis zoom: price range of fills ± padding scaled to spread
         p_min, p_max = top['price'].min(), top['price'].max()
-        pad = max((p_max - p_min) * 0.5, 0.002)
+        spread_range = float((s['mid_A'][mask].max() - s['mid_A'][mask].min())) if mask.any() else 0.0
+        pad = max((p_max - p_min) * 0.5, spread_range * 0.15, 0.0005)
         ax.set_ylim(p_min - pad, p_max + pad)
+        ax.set_xlim(t_lo, t_hi)
 
         ax.set_title(f'Market A — Top {len(top)} fills by size (marker ∝ EUR size)',
                      color='white', fontsize=13)

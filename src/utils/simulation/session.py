@@ -31,10 +31,11 @@ restore_ctrl(state, stock, market_B, market_C, quoter_config, capital, client_se
 
 from __future__ import annotations
 
+import json
 import pickle
 import pathlib
 import time
-from typing import Callable, Any, List, Tuple
+from typing import Callable, Any, Dict, List, Optional, Tuple
 
 
 # ── Raw pickle helpers ─────────────────────────────────────────────────────────
@@ -55,28 +56,90 @@ def load_obj(path) -> Any:
     return obj
 
 
+# ── Metadata helpers ───────────────────────────────────────────────────────────
+
+def _meta_path(pkl_path: pathlib.Path) -> pathlib.Path:
+    """Return the companion .meta.json path for a given pkl path."""
+    return pkl_path.with_suffix(".meta.json")
+
+
+def _save_meta(pkl_path: pathlib.Path, meta: Dict) -> None:
+    mp = _meta_path(pkl_path)
+    with open(mp, "w") as f:
+        json.dump(meta, f)
+
+
+def _load_meta(pkl_path: pathlib.Path) -> Optional[Dict]:
+    mp = _meta_path(pkl_path)
+    if not mp.exists():
+        return None
+    with open(mp) as f:
+        return json.load(f)
+
+
+def _meta_matches(pkl_path: pathlib.Path, expected: Dict) -> bool:
+    """
+    Return True if every key in `expected` matches the stored meta.
+    Returns False (stale) if meta file is missing or any value differs.
+    Numeric values are compared with a small relative tolerance (1e-9).
+    """
+    stored = _load_meta(pkl_path)
+    if stored is None:
+        return False
+    for k, v in expected.items():
+        sv = stored.get(k)
+        if sv is None:
+            return False
+        # Numeric comparison with tolerance
+        try:
+            if abs(float(sv) - float(v)) > 1e-9 * max(1.0, abs(float(v))):
+                return False
+        except (TypeError, ValueError):
+            if sv != v:
+                return False
+    return True
+
+
 # ── Cache helpers ──────────────────────────────────────────────────────────────
 
-def cache(path, force: bool, fn: Callable) -> Any:
+def cache(path, force: bool, fn: Callable,
+          meta: Optional[Dict] = None) -> Any:
     """
-    If force=False and path exists: load and return.
+    If force=False and path exists (and meta matches if provided): load and return.
     Otherwise: call fn(), save result to path, return result.
+
+    meta : optional dict of key/value pairs saved alongside the pkl.
+           On subsequent loads the stored values are compared against `meta`;
+           a mismatch (e.g. dt changed) is treated as a cache miss and the
+           object is recomputed automatically.
+
+    Example
+    -------
+    stock = cache(path, force=False, fn=lambda: build(), meta={'dt': 0.1, 'n_days': 2})
     """
     path = pathlib.Path(path)
-    if not force and path.exists():
+    stale = meta is not None and path.exists() and not _meta_matches(path, meta)
+    if stale:
+        print(f"[cache] STALE   {path.name}  (meta mismatch {meta}) — recomputing")
+    if not force and not stale and path.exists():
         return load_obj(path)
     result = fn()
     save_obj(result, path)
+    if meta is not None:
+        _save_meta(path, meta)
     return result
 
 
-def cache_group(paths: List, force: bool, fn: Callable) -> Tuple:
+def cache_group(paths: List, force: bool, fn: Callable,
+                meta: Optional[Dict] = None) -> Tuple:
     """
     Like cache() but for a function that returns a tuple of objects,
     each saved to its own file.
 
     paths : list of file paths, one per returned object
     fn    : callable returning a tuple of the same length as paths
+    meta  : optional dict — saved alongside every file and validated on load.
+            Any mismatch (e.g. dt changed) invalidates the whole group.
 
     Example
     -------
@@ -84,14 +147,26 @@ def cache_group(paths: List, force: bool, fn: Callable) -> Tuple:
         [dir/'stock.pkl', dir/'mkt_B.pkl', dir/'mkt_C.pkl'],
         force=False,
         fn=lambda: build_markets(seed=42, n_days=30, dt_seconds=0.05),
+        meta={'dt': 0.05, 'n_days': 30, 'seed': 42},
     )
     """
     paths = [pathlib.Path(p) for p in paths]
-    if not force and all(p.exists() for p in paths):
+    # Check staleness: any file missing or meta mismatch → recompute all
+    all_exist = all(p.exists() for p in paths)
+    if meta is not None and all_exist:
+        stale = not all(_meta_matches(p, meta) for p in paths)
+        if stale:
+            print(f"[cache] STALE   {[p.name for p in paths]}  "
+                  f"(meta mismatch {meta}) — recomputing")
+    else:
+        stale = False
+    if not force and not stale and all_exist:
         return tuple(load_obj(p) for p in paths)
     results = fn()
     for obj, p in zip(results, paths):
         save_obj(obj, p)
+        if meta is not None:
+            _save_meta(p, meta)
     return tuple(results)
 
 
@@ -101,9 +176,19 @@ def build_markets(seed: int, n_days: int, dt_seconds: float,
                   alpha: float = 0.05, beta: float = 0.94,
                   lam: int = 100, sigma_J: float = 0.005,
                   drift: float = 0.0, vol: float = 0.07,
-                  origin: float = 1.10):
+                  origin: float = 1.10,
+                  _ref_dt: float = 0.05):
     """
     Simulate a GARCH price path and build reference markets B and C.
+
+    GARCH alpha/beta are per-step parameters: the same (alpha, beta) values give
+    different vol-cluster durations at different dt.  We rescale them so the
+    vol-cluster half-life in *wall-clock seconds* stays constant regardless of dt.
+
+    The reference calibration is _ref_dt=0.05 s.  At any other dt the persistence
+    p = alpha+beta is mapped to the equivalent per-step persistence via:
+        p_new = p_ref^(dt/ref_dt)
+    and alpha/beta are kept proportional.
 
     Returns
     -------
@@ -112,6 +197,17 @@ def build_markets(seed: int, n_days: int, dt_seconds: float,
     import numpy as np
     from ..stock_simulation import Stock
     from ..report.fast_config import build_markets_B_C
+
+    # ── Scale GARCH persistence for dt ────────────────────────────────────────
+    if abs(dt_seconds - _ref_dt) > 1e-9:
+        p_ref = alpha + beta
+        # Clip persistence below 1 so the GARCH is stationary
+        p_ref = min(p_ref, 0.9999)
+        # Each step at dt_seconds must carry the same per-second persistence
+        p_new = p_ref ** (dt_seconds / _ref_dt)
+        ratio = (p_new / p_ref) if p_ref > 0 else 1.0
+        alpha = alpha * ratio
+        beta  = beta  * ratio
 
     np.random.seed(seed)
     stock = Stock(drift=drift, vol=vol, origin=origin)
@@ -141,7 +237,7 @@ def run_sim(stock, market_B, market_C, quoter_config,
     from ..report.controller import Controller
     from ..client_flow.flow_generator import ClientFlowGenerator
 
-    book = Order_book(track_submissions=True)
+    book = Order_book()   # track_submissions=False (default) — avoids ~11M dict allocs
     mm   = Quoter(market_B, market_C, config=quoter_config, capital_K=capital)
     book.register_quoter_listener(mm.on_fill)
 
@@ -172,7 +268,6 @@ def run_sim(stock, market_B, market_C, quoter_config,
         "fill_history":    mm._fill_history,
         "inventory":       mm.inventory,
         "step_log_sample": sl.iloc[sample_idx].to_dict("records"),
-        "order_history":   book._submission_log,
     }
 
 
@@ -194,7 +289,7 @@ def restore_ctrl(state: dict, market_B, market_C, quoter_config, capital: float,
     from ..report.controller import Controller
     from ..client_flow.flow_generator import ClientFlowGenerator
 
-    book = Order_book(track_submissions=True)
+    book = Order_book()
     mm   = Quoter(market_B, market_C, config=quoter_config, capital_K=capital)
     book.register_quoter_listener(mm.on_fill)
 
@@ -208,7 +303,6 @@ def restore_ctrl(state: dict, market_B, market_C, quoter_config, capital: float,
     mm._fill_history       = state["fill_history"]
     mm.inventory           = state["inventory"]
     ctrl._step_log         = state["step_log_sample"]
-    book._submission_log   = state.get("order_history", [])
 
     return ctrl, mm, book
 
