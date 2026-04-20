@@ -4,37 +4,60 @@
 \contentsline {subsection}{\numberline {1.3}Simulation Environment}{3}{subsection.1.3}%
 \contentsline {subsection}{\numberline {1.4}Evaluation}{4}{subsection.1.4}%
 \contentsline {subsection}{\numberline {1.5}Report Structure}{4}{subsection.1.5}%
-\contentsline {section}{\numberline {2}Order Book}{5}{section.2}%
-\contentsline {subsection}{\numberline {2.1}Data structure}{5}{subsection.2.1}%
-\contentsline {subsection}{\numberline {2.2}Submissions and cancellations}{5}{subsection.2.2}%
-\contentsline {subsection}{\numberline {2.3}Matching rule}{5}{subsection.2.3}%
-\contentsline {subsection}{\numberline {2.4}Fills as events}{6}{subsection.2.4}%
-\contentsline {section}{\numberline {3}Market Simulator for Venues B and C}{7}{section.3}%
-\contentsline {subsection}{\numberline {3.1}Noised mid}{7}{subsection.3.1}%
-\contentsline {subsection}{\numberline {3.2}Spread regimes}{7}{subsection.3.2}%
-\contentsline {paragraph}{Venue $C$ --- Adaptive.}{7}{section*.3}%
-\contentsline {paragraph}{Venue $B$ --- Skewed.}{8}{section*.4}%
-\contentsline {subsection}{\numberline {3.3}Depth}{8}{subsection.3.3}%
-\contentsline {subsection}{\numberline {3.4}One stock, two venues}{8}{subsection.3.4}%
-\contentsline {subsection}{\numberline {3.5}Validation}{8}{subsection.3.5}%
-\contentsline {section}{\numberline {4}Market-Making Logic on Exchange A}{10}{section.4}%
-\contentsline {subsection}{\numberline {4.1}Fair mid under latency asymmetry}{10}{subsection.4.1}%
-\contentsline {subsection}{\numberline {4.2}Reservation price: Avellaneda--Stoikov with infinite horizon}{10}{subsection.4.2}%
-\contentsline {subsection}{\numberline {4.3}Three-component spread with fee floor}{10}{subsection.4.3}%
-\contentsline {subsection}{\numberline {4.4}Asymmetric skew and ladder}{11}{subsection.4.4}%
-\contentsline {subsection}{\numberline {4.5}Selective re-quoting}{11}{subsection.4.5}%
-\contentsline {subsection}{\numberline {4.6}Hedge router}{12}{subsection.4.6}%
-\contentsline {section}{\numberline {5}Client Order Flow on Exchange A}{13}{section.5}%
-\contentsline {subsection}{\numberline {5.1}Poisson arrivals with price-sensitive intensity}{13}{subsection.5.1}%
-\contentsline {subsection}{\numberline {5.2}Market-versus-limit mix and limit placement}{13}{subsection.5.2}%
-\contentsline {subsection}{\numberline {5.3}Heavy-tailed order sizes}{14}{subsection.5.3}%
-\contentsline {subsection}{\numberline {5.4}Consumption by the order book}{15}{subsection.5.4}%
-\contentsline {section}{\numberline {6}Inventory and P\&L Tracking}{16}{section.6}%
-\contentsline {subsection}{\numberline {6.1}Sign and fee convention}{16}{subsection.6.1}%
-\contentsline {subsection}{\numberline {6.2}Realized versus mark-to-market}{16}{subsection.6.2}%
-\contentsline {subsection}{\numberline {6.3}Inception spread versus mid-to-mid revaluation}{16}{subsection.6.3}%
-\contentsline {subsection}{\numberline {6.4}Continuous MtM and final inventory}{17}{subsection.6.4}%
-\contentsline {section}{\numberline {7}Phase 1 Backtest Report}{18}{section.7}%
-\contentsline {section}{\numberline {8}Phase 2 --- Calibration from Trading History}{19}{section.8}%
-\contentsline {section}{\numberline {9}Phase 3 --- Fallback Liquidity Under HFT Competition}{20}{section.9}%
-\contentsline {section}{\numberline {10}Conclusion}{21}{section.10}%
+\contentsline {section}{\numberline {2}Literature Review}{5}{section.2}%
+\contentsline {section}{\numberline {3}Order Book}{6}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Data structure}{6}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Submissions and cancellations}{6}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Matching rule}{6}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Fills as events}{7}{subsection.3.4}%
+\contentsline {section}{\numberline {4}Market Simulator for Venues B and C}{8}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Noised mid}{8}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Spread regimes}{8}{subsection.4.2}%
+\contentsline {paragraph}{Venue $C$ --- Adaptive.}{8}{section*.3}%
+\contentsline {paragraph}{Venue $B$ --- Skewed.}{9}{section*.4}%
+\contentsline {subsection}{\numberline {4.3}Depth}{9}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}One stock, two venues}{9}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Validation}{9}{subsection.4.5}%
+\contentsline {section}{\numberline {5}Market-Making Logic on Exchange A}{11}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Fair mid under latency asymmetry}{11}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Reservation price: Avellaneda--Stoikov with infinite horizon}{11}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Three-component spread with fee floor}{11}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Asymmetric skew and ladder}{12}{subsection.5.4}%
+\contentsline {subsection}{\numberline {5.5}Selective re-quoting}{12}{subsection.5.5}%
+\contentsline {subsection}{\numberline {5.6}Hedge router}{13}{subsection.5.6}%
+\contentsline {section}{\numberline {6}Client Order Flow on Exchange A}{14}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Poisson arrivals with price-sensitive intensity}{14}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Market-versus-limit mix and limit placement}{14}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Heavy-tailed order sizes}{15}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Consumption by the order book}{16}{subsection.6.4}%
+\contentsline {section}{\numberline {7}Inventory and P\&L Tracking}{17}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Sign and fee convention}{17}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Realized versus mark-to-market}{17}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Inception spread versus mid-to-mid revaluation}{17}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Continuous MtM and final inventory}{18}{subsection.7.4}%
+\contentsline {section}{\numberline {8}Phase 1 Backtest Report}{19}{section.8}%
+\contentsline {subsection}{\numberline {8.1}What we simulated}{19}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Headline results}{19}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Prices across the three venues}{20}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}Execution profile: the largest fills}{20}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}Inventory exposure and risk controls}{20}{subsection.8.5}%
+\contentsline {subsection}{\numberline {8.6}Per-trade P\&L dispersion}{21}{subsection.8.6}%
+\contentsline {subsection}{\numberline {8.7}Fill rate and ladder utilisation}{22}{subsection.8.7}%
+\contentsline {subsection}{\numberline {8.8}What Phase 2 will change}{23}{subsection.8.8}%
+\contentsline {section}{\numberline {9}Phase 2 --- Calibration from Trading History}{25}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Why calibrate, and what to calibrate}{25}{subsection.9.1}%
+\contentsline {paragraph}{Scope of the calibration.}{25}{section*.16}%
+\contentsline {subsection}{\numberline {9.2}Data available from Phase~1}{25}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Arrival-intensity decay~$k$}{25}{subsection.9.3}%
+\contentsline {subsection}{\numberline {9.4}Volatility: EWMA span + GARCH(1,1)}{26}{subsection.9.4}%
+\contentsline {paragraph}{EWMA grid search.}{26}{section*.17}%
+\contentsline {paragraph}{GARCH(1,1) MLE.}{26}{section*.18}%
+\contentsline {paragraph}{Model selection.}{26}{section*.19}%
+\contentsline {subsection}{\numberline {9.5}Spread components $\alpha _{\text {spread}}, \alpha _{\text {imb}}$}{26}{subsection.9.5}%
+\contentsline {subsection}{\numberline {9.6}Staleness threshold stale\_s}{27}{subsection.9.6}%
+\contentsline {subsection}{\numberline {9.7}Risk aversion $\gamma $ and horizon $\omega $}{27}{subsection.9.7}%
+\contentsline {subsection}{\numberline {9.8}Ladder shape $Q_{\text {base}}$ and $\beta $}{28}{subsection.9.8}%
+\contentsline {subsection}{\numberline {9.9}How the calibrators fit together}{28}{subsection.9.9}%
+\contentsline {subsection}{\numberline {9.10}From heuristic defaults to calibrated values}{28}{subsection.9.10}%
+\contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{30}{section.10}%
+\contentsline {section}{\numberline {11}Conclusion}{31}{section.11}%

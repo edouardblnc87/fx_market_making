@@ -1,6 +1,147 @@
 \section{Phase 1 Backtest Report}
 \label{sec:backtest}
-% Subject task 7 --- Phase 1 results, month of simulated data.
-% TODO: the five mandatory figures (best bid/ask/mid per venue; top 10 trades;
-% inventory vs mid; MtM percentile evolution; fill-rate analysis), plus
-% interpretation and sanity checks.
+
+\subsection{What we simulated}
+
+Phase~1 is a 30-day EUR/USD backtest in which the firm is the sole designated market maker on a new exchange~A. The quoter posts a ten-level ladder on each side of the book, a client-flow generator emits market and limit orders with Poisson arrivals and Pareto-distributed sizes, and a hedging router recycles imbalanced EUR inventory onto B or C whenever the directional exposure grows too large.
+
+The parameters used in Phase~1 : risk aversion, depth decay and inventory limits are not estimated from data. No calibration is performed at this stage --- the purpose of the run is to verify that the pipeline executes, captures spread and responds correctly to inventory skew. Capital is \$1\,M, split 50/50 between EUR and USD at inception. The time step is 100\,ms; the backtest spans 30~calendar days.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{lr}
+\toprule
+Parameter & Value \\
+\midrule
+Capital $K$ & \$1\,000\,000 \\
+Risk aversion $\gamma$ & 0.10 \\
+Arrival intensity $k$ & 0.30 \\
+Discount rate $\omega$ & $3.47\!\times\!10^{-5}\,\mathrm{s}^{-1}$ ($\approx 8$\,h) \\
+Base quoted size $Q_{\text{base}}$ & 70\,000 EUR \\
+Ladder levels / depth decay $\beta$ & 10 / 0.30 \\
+Inventory alert threshold & $\pm 90\%$ of $K/2$ \\
+Hard inventory limit (hedging trigger) & $\pm 80\%$ of $K/2$ \\
+Volatility estimation window & 60\,s \\
+Maker / taker fees on A & 1 / 4 bps \\
+Maker / taker fees on B & 1 / 2 bps \\
+Maker / taker fees on C & 1 / 3 bps \\
+Latencies to B / C / HFT window & 200 / 170 / 50 ms \\
+\bottomrule
+\end{tabular}
+\caption{Phase 1 configuration.}
+\label{tab:p1-config}
+\end{table}
+
+\subsection{Headline results}
+
+Over the 30-day window the strategy closes with a positive total mark-to-market P\&L of roughly \$7.5\,k. The decomposition, however, tells a more interesting story than the headline number. The cash account alone is negative by almost \$140\,k, and the remainder of the open EUR leg marked at the terminal mid contributes a positive revaluation of about +\$147\,k. The two sides nearly cancel, and the small positive residual happens to coincide with EUR/USD drifting modestly upward over the sample. Isolating the component that a market maker actually earns --- the spread captured at each fill --- gives about +\$8.4\,k, slightly more than the headline P\&L. Unrealised inventory revaluation adds another +\$3.6\,k, while fees cost \$4.6\,k over the month, four fifths of which are maker fees paid on our own exchange.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{lr}
+\toprule
+Metric & USD \\
+\midrule
+\textbf{Total MtM P\&L} & \textbf{+7\,483.54} \\
+\quad Realised cash P\&L & $-$139\,816.52 \\
+\quad Unrealised (open inventory $\times$ mid) & +147\,300.06 \\
+\midrule
+Spread captured at fill time & +8\,415.27 \\
+Inventory revaluation & +3\,642.96 \\
+Fees paid (total) & 4\,574.69 \\
+\quad Maker fees (exchange A) & 4\,030.48 \\
+\quad Taker fees (hedging on B/C) & 544.21 \\
+\midrule
+MM fills & 14\,375 (479 / day) \\
+Hedging legs executed & 10 \\
+Final net EUR inventory & +136\,838 EUR \\
+Average quoted spread on A & 5.94 bps ($\sigma = 0.45$) \\
+Reference spread on B / C & 2.50 / 1.41 bps \\
+\bottomrule
+\end{tabular}
+\caption{Phase 1 aggregate performance (30~days).}
+\label{tab:p1-kpi}
+\end{table}
+
+Activity is dense: the quoter absorbs 14\,375 fills over the month, averaging 479 fills per day and a clip size of about 2\,600~EUR. Only ten hedging legs are sent out. The final net EUR position is about +137\,k, which represents 13.7\% of capital --- far from flat. The spread we quote on A is close to 6~bps, against 2.5\,bps on B and 1.4\,bps on C.
+
+\subsection{Prices across the three venues}
+
+Figure~\ref{fig:p1-prices} shows best bid, best ask and mid for the three venues, with the instantaneous bid--ask spread in bps at the bottom. EUR/USD starts at 1.100, drifts down to roughly 1.058 during the first third of the window, then recovers partially to about 1.076 by the end. Venues~B and C track each other closely at tight reference spreads; our exchange~A is visibly wider, which is the expected behaviour for a single market maker quoting against two references it can only observe through a 170--200\,ms latency window. The spread panel at the bottom shows occasional short spikes on A whenever the referenced prices move quickly, consistent with the quoter widening defensively during bursts of mid drift.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase1-3markets-prices.png}
+\caption{Best bid, best ask and mid-price for the three venues over 30~days, with the instantaneous bid--ask spread in bps (bottom panel).}
+\label{fig:p1-prices}
+\end{figure}
+
+\subsection{Execution profile: the largest fills}
+
+Figure~\ref{fig:p1-top10} zooms on the ten largest trades executed on A, with marker area proportional to the EUR notional and each fill annotated with its size and the per-trade spread captured at inception. The largest clips cluster in the 52--59\,k EUR range, all arising as partial fills against a large quoted size. Seven of the ten top fills are sells and three are buys, which mirrors the directional path of EUR/USD in Figure~\ref{fig:p1-prices}: we sold into the initial down-leg and were bought from during the recovery.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase1-top10-trades.png}
+\caption{Top ten MM fills on exchange A, by EUR size. Green = buy, red = sell. Markers show captured inception spread in basis points.}
+\label{fig:p1-top10}
+\end{figure}
+
+The spread actually captured on these fills ranges from 0.0 to 1.7~bps --- a small fraction of the 5.94~bps half-spread we quote on average. The remainder of the quoted half-spread sits unfilled on the book as a risk buffer; when a client does cross the touch, the portion of our quote that converts into realised revenue is thin.
+
+\subsection{Inventory exposure and risk controls}
+
+Figure~\ref{fig:p1-inv} overlays the fair cross-venue mid against the absolute EUR leg of the portfolio. Two features are worth commenting on. First, the inventory trace is negatively correlated with the mid for most of the month: the quoter accumulates EUR when EUR/USD dips, and unwinds it as the pair recovers. That is precisely the behaviour expected from an Avellaneda--Stoikov skew --- the quoter tilts its quotes to attract the offsetting flow whenever inventory drifts away from neutral. Qualitatively, the risk-management layer is working.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase1-inventory-vs-price.png}
+\caption{EUR/USD fair mid (blue) against absolute EUR leg (orange) over 30~days. The dashed lines mark the inventory bands.}
+\label{fig:p1-inv}
+\end{figure}
+
+Second, and more critically, the inventory bands are set so wide that they almost never fire. The EUR leg swings between essentially zero and more than 900\,k during the month --- equivalent to net inventory of roughly $\pm 400$\,k around the neutral half-capital --- yet the hedging router only sends ten offsetting legs in 30~days. Hedging is therefore not doing much to neutralise the directional risk, which is why the realised and unrealised P\&L streams end up being of the same order of magnitude and of opposite sign.
+
+\subsection{Per-trade P\&L dispersion}
+
+Figure~\ref{fig:p1-mtm} plots the distribution of per-trade mark-to-market P\&L as a function of $\tau$, the time elapsed since the trade was inceptioned. The shaded band contains the 5th to 95th percentile, with the median and the mean overlaid. The dispersion is wide from the moment a trade is struck --- the 90\% confidence band spans roughly $\pm\$3\,500$ at $\tau = 0$ --- and it remains wide for the full month. This is entirely driven by the variance of the open EUR leg against EUR/USD moves; it is not the shape of a P\&L distribution that is converging to a positive mean as more trades age.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase1-mtm-percentiles.png}
+\caption{Per-trade mark-to-market contribution (USD) as a function of time since fill inception. Shaded band: 5th--95th percentile. Solid = median, dashed = mean. Sample of 500 fills.}
+\label{fig:p1-mtm}
+\end{figure}
+
+More importantly, the mean sits slightly but persistently below zero at every value of $\tau$. That pattern is the signature of mild adverse selection: on average, the mid drifts against us between the moment we cross the spread and the moment a given trade would be marked out. The per-fill spread captured (bid--ask revenue at inception) is real and positive, but it is smaller than the subsequent unfavourable mid move, so the net per-trade contribution is negative once we wait long enough.
+
+\subsection{Fill rate and ladder utilisation}
+
+Over the month the matching engine records 14\,375 MM fills at an average clip size of 2\,616~EUR. Only 0.5\% of these are full fills: the remaining 99.5\% are partials, which means the posted size at the touch is systematically larger than the size clients arrive with. Table~\ref{tab:p1-levels} breaks the fills down by depth level: the top of the ladder absorbs 99.6\% of all executions, level two barely reaches 0.4\%, and everything from level three outwards is effectively dormant.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{lrr}
+\toprule
+Depth level & Fill count & Relative rate \\
+\midrule
+1 & 14\,319 & 1.000 \\
+2 & 54 & 0.004 \\
+3 & 2 & 0.000 \\
+4--10 & 0 & 0.000 \\
+\bottomrule
+\end{tabular}
+\caption{Phase 1 fills broken down by ladder level.}
+\label{tab:p1-levels}
+\end{table}
+
+The ten-level ladder is therefore substantially over-provisioned relative to the actual arrival intensity. The base clip size is also too large: clients never arrive big enough to consume it, so every execution is a partial and the deeper layers never get a look-in.
+
+\subsection{What Phase 2 will change}
+
+Three concrete adjustments are planned for Phase~2 to address the shortcomings observed above. First, the risk aversion $\gamma$ is going to be re-estimated from the observed trade distribution, not set by a rule of thumb: the expected direction is a large reduction relative to the Phase~1 value, which should make the quoter tilt much more aggressively against inventory. Second, the base quoted size $Q_{\text{base}}$ will be calibrated to the empirical arrival distribution, which should cut it by roughly an order of magnitude and allow the deeper levels of the ladder to actually participate. Third, the inventory thresholds will be tightened so that hedging legs fire on a realistic timescale --- bringing the directional exposure carried between fills down to a fraction of what is observed in Phase~1.
+
+The arrival-intensity parameter $k$, the volatility-estimation window and the imbalance weight will also be re-estimated from data, rather than inherited from the default configuration. Once all of these are fitted, Phase~2 re-runs the same simulation machinery on a fresh 30-day path, and the diagnostics we will watch most closely are the hedging-frequency, the ladder utilisation (levels 2--10) and the mean of the per-trade P\&L curve, which should move from mildly negative towards zero if the recalibrated quoter internalises adverse selection correctly.

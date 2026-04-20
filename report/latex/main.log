@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.3.9)  20 APR 2026 18:26
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.3.9)  20 APR 2026 22:10
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -496,61 +496,189 @@ File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 \tf@toc=\write4
 \openout4 = `main.toc'.
 
-[2] (sections/00_introduction.tex [3]) [4] (sections/01_orderbook.tex
-<../images/orderbook_1.png, id=228, 1003.8303pt x 570.933pt>
+[2] (sections/00_introduction.tex [3]) [4] (sections/00b_literature_review.tex)
+[5
+
+] (sections/01_orderbook.tex
+<../images/orderbook_1.png, id=357, 1003.8303pt x 570.933pt>
 File: ../images/orderbook_1.png Graphic file (type png)
 <use ../images/orderbook_1.png>
 Package pdftex.def Info: ../images/orderbook_1.png  used on input line 42.
 (pdftex.def)             Requested size: 218.51521pt x 124.28146pt.
-<../images/orderbook_2.png, id=230, 1003.8303pt x 570.933pt>
+<../images/orderbook_2.png, id=359, 1003.8303pt x 570.933pt>
 File: ../images/orderbook_2.png Graphic file (type png)
 <use ../images/orderbook_2.png>
 Package pdftex.def Info: ../images/orderbook_2.png  used on input line 48.
 (pdftex.def)             Requested size: 218.51521pt x 124.28146pt.
- [5
+ [6
 
- <../images/orderbook_1.png> <../images/orderbook_2.png>]) [6]
-(sections/02_market_simulator.tex [7
+ <../images/orderbook_1.png> <../images/orderbook_2.png>]) [7] (sections/02_mar
+ket_simulator.tex [8
 
 ]
-<../images/spread-regimes-garch.png, id=260, 1003.8303pt x 1170.0513pt>
+<../images/spread-regimes-garch.png, id=386, 1003.8303pt x 1170.0513pt>
 File: ../images/spread-regimes-garch.png Graphic file (type png)
 <use ../images/spread-regimes-garch.png>
 Package pdftex.def Info: ../images/spread-regimes-garch.png  used on input line
  128.
 (pdftex.def)             Requested size: 386.96027pt x 451.03352pt.
-) [8] [9 <../images/spread-regimes-garch.png>] (sections/03_quoter.tex [10
+) [9] [10 <../images/spread-regimes-garch.png>] (sections/03_quoter.tex [11
 
-] [11]) [12] (sections/04_client_flow.tex
-<../images/client-flow-intensity.png, id=309, 714.7503pt x 281.853pt>
+] [12]) [13]
+(sections/04_client_flow.tex
+<../images/client-flow-intensity.png, id=429, 714.7503pt x 281.853pt>
 File: ../images/client-flow-intensity.png Graphic file (type png)
 <use ../images/client-flow-intensity.png>
 Package pdftex.def Info: ../images/client-flow-intensity.png  used on input lin
 e 53.
 (pdftex.def)             Requested size: 341.43307pt x 134.64279pt.
-
-[13
+ [14
 
  <../images/client-flow-intensity.png>]
-<../images/client-flow-pareto.png, id=318, 508.7808pt x 281.853pt>
+<../images/client-flow-pareto.png, id=437, 508.7808pt x 281.853pt>
 File: ../images/client-flow-pareto.png Graphic file (type png)
 <use ../images/client-flow-pareto.png>
 Package pdftex.def Info: ../images/client-flow-pareto.png  used on input line 1
 12.
 (pdftex.def)             Requested size: 341.43307pt x 189.15448pt.
-) [14 <../images/client-flow-pareto.png>] [15] (sections/06_pnl_inventory.tex) 
-[16
+)
+[15 <../images/client-flow-pareto.png>] [16] (sections/06_pnl_inventory.tex)
+[17
 
-] [17]
-(sections/07_backtest_report.tex) [18
+] [18] (sections/07_backtest_report.tex [19
 
-] (sections/08_phase2_calibration.tex)
-[19
+]
+<../images/phase1-3markets-prices.png, id=475, 1006.7211pt x 1021.1751pt>
+File: ../images/phase1-3markets-prices.png Graphic file (type png)
+<use ../images/phase1-3markets-prices.png>
+Package pdftex.def Info: ../images/phase1-3markets-prices.png  used on input li
+ne 76.
+(pdftex.def)             Requested size: 432.48051pt x 438.6916pt.
+<../images/phase1-top10-trades.png, id=478, 1006.7211pt x 500.8311pt>
+File: ../images/phase1-top10-trades.png Graphic file (type png)
+<use ../images/phase1-top10-trades.png>
+Package pdftex.def Info: ../images/phase1-top10-trades.png  used on input line 
+87.
+(pdftex.def)             Requested size: 432.48051pt x 215.15448pt.
+ [20]
+<../images/phase1-inventory-vs-price.png, id=489, 1006.7211pt x 356.2911pt>
+File: ../images/phase1-inventory-vs-price.png Graphic file (type png)
+<use ../images/phase1-inventory-vs-price.png>
+Package pdftex.def Info: ../images/phase1-inventory-vs-price.png  used on input
+ line 100.
+(pdftex.def)             Requested size: 432.48051pt x 153.06082pt.
+ [21 <../images/phase1-3markets-prices.png>]
+<../images/phase1-mtm-percentiles.png, id=497, 1006.7211pt x 356.2911pt>
+File: ../images/phase1-mtm-percentiles.png Graphic file (type png)
+<use ../images/phase1-mtm-percentiles.png>
+Package pdftex.def Info: ../images/phase1-mtm-percentiles.png  used on input li
+ne 113.
+(pdftex.def)             Requested size: 432.48051pt x 153.06082pt.
+ [22 <../images/phase1-top10-trades.png> <../images/phase1-inventory-vs-price.p
+ng>]) [23 <../images/phase1-mtm-percentiles.png>] [24]
+(sections/08_phase2_calibration.tex
 
-] (sections/09_phase3_hft.tex) [20
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 53.
 
-] (sections/10_conclusion.tex) (main.bbl)
-[21
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 53.
+
+[25
+
+]
+Overfull \hbox (39.77667pt too wide) in paragraph at lines 79--82
+\T1/cmr/m/n/12 The quoter uses an exponentially-weighted es-ti-ma-tor of re-ali
+sed vari-ance with span \T1/cmtt/m/n/12 vol_window_s\T1/cmr/m/n/12 .
+ []
+
+
+Overfull \hbox (57.31259pt too wide) in paragraph at lines 83--93
+\T1/cmr/m/n/12 ing seg-ment and a 30% held-out tail. For each can-di-date span 
+$\OML/cmm/m/it/12 w \OMS/cmsy/m/n/12 2 f\OT1/cmr/m/n/12 500\OML/cmm/m/it/12 ; \
+OT1/cmr/m/n/12 1000\OML/cmm/m/it/12 ; \OT1/cmr/m/n/12 2000\OML/cmm/m/it/12 ; \O
+T1/cmr/m/n/12 4000\OML/cmm/m/it/12 ; \OT1/cmr/m/n/12 6000\OML/cmm/m/it/12 ; \OT
+1/cmr/m/n/12 10000\OMS/cmsy/m/n/12 g$
+ []
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 120.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `\alpha' on input line 120.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 120.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `\alpha' on input line 120.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 120.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 120.
+
+[26]
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 173.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `\gamma' on input line 173.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 173.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 173.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `\omega' on input line 173.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 173.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 216.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 216.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 216.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 216.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `\beta' on input line 216.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 216.
+
+[27]) [28] [29] (sections/09_phase3_hft.tex) [30
+
+] (sections/10_conclusion.tex)
+(main.bbl) [31
 
 ] (main.aux)
  ***********
@@ -558,46 +686,49 @@ LaTeX2e <2025-11-01>
 L3 programming layer <2025-12-24>
  ***********
 Package rerunfilecheck Info: File `main.out' has not changed.
-(rerunfilecheck)             Checksum: EDB919BE15D417051EE59576EAE90390;7007.
+(rerunfilecheck)             Checksum: C0CA40B8D3590D8C7B9471C9BE3F3E1D;10981.
  ) 
 Here is how much of TeX's memory you used:
- 13230 strings out of 467871
- 209820 string characters out of 5418377
- 633471 words of memory out of 5000000
- 41828 multiletter control sequences out of 15000+600000
- 647249 words of font info for 89 fonts, out of 8000000 for 9000
+ 13380 strings out of 467871
+ 213462 string characters out of 5418377
+ 635078 words of memory out of 5000000
+ 41925 multiletter control sequences out of 15000+600000
+ 650698 words of font info for 98 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,11n,79p,417b,547s stack positions out of 10000i,1000n,20000p,200000b,200000s
- <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm
-0800.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi60
-0\ecrm1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec
-/dpi600\ecbx1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknap
-pen/ec/dpi600\ecti1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour
-/jknappen/ec/dpi600\ectt1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/
-ljfour/jknappen/ec/dpi600\ecbx1440.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fon
-ts/pk/ljfour/jknappen/ec/dpi600\ecrm1200.pk> <C:\Users\cleme\AppData\Local\MiKT
-eX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1200.pk> <C:\Users\cleme\AppData\Loca
-l\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1728.pk> <C:\Users\cleme\AppDat
-a\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1095.pk> <C:\Users\cleme\
-AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1440.pk> <C:\Users\
-cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx2074.pk><C:/U
-sers/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmex10.
-pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/c
-m/cmmi10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/a
-msfonts/cm/cmmi12.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1
-/public/amsfonts/cm/cmmi6.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fon
-ts/type1/public/amsfonts/cm/cmmi8.pfb><C:/Users/cleme/AppData/Local/Programs/Mi
-KTeX/fonts/type1/public/amsfonts/cm/cmr10.pfb><C:/Users/cleme/AppData/Local/Pro
-grams/MiKTeX/fonts/type1/public/amsfonts/cm/cmr12.pfb><C:/Users/cleme/AppData/L
-ocal/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr6.pfb><C:/Users/cleme/Ap
-pData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr7.pfb><C:/Users/c
-leme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr8.pfb><C:/
-Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmsy10
-.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/
-cm/cmsy8.pfb>
-Output written on main.pdf (21 pages, 824553 bytes).
+ 75i,14n,79p,904b,547s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\tcrm
+1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi60
+0\ecbx1095.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec
+/dpi600\ecrm1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknap
+pen/ec/dpi600\ecbx1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour
+/jknappen/ec/dpi600\ecti1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/
+ljfour/jknappen/ec/dpi600\ectt1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fon
+ts/pk/ljfour/jknappen/ec/dpi600\ecbx1440.pk> <C:\Users\cleme\AppData\Local\MiKT
+eX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm0800.pk> <C:\Users\cleme\AppData\Loca
+l\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1200.pk> <C:\Users\cleme\AppDat
+a\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1200.pk> <C:\Users\cleme\
+AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1728.pk> <C:\Users\
+cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1095.pk> <C:\
+Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1440.pk
+> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx2
+074.pk><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfont
+s/cm/cmex10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/publi
+c/amsfonts/cm/cmmi10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/ty
+pe1/public/amsfonts/cm/cmmi12.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX
+/fonts/type1/public/amsfonts/cm/cmmi6.pfb><C:/Users/cleme/AppData/Local/Program
+s/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi8.pfb><C:/Users/cleme/AppData/Local
+/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr10.pfb><C:/Users/cleme/AppDa
+ta/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr12.pfb><C:/Users/cle
+me/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr6.pfb><C:/Us
+ers/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr7.pfb
+><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/c
+mr8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfon
+ts/cm/cmsy10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/publ
+ic/amsfonts/cm/cmsy8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/ty
+pe1/public/amsfonts/symbols/msbm10.pfb>
+Output written on main.pdf (31 pages, 1391980 bytes).
 PDF statistics:
- 923 PDF objects out of 1000 (max. 8388607)
- 79 named destinations out of 1000 (max. 500000)
- 330 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 1224 PDF objects out of 1440 (max. 8388607)
+ 126 named destinations out of 1000 (max. 500000)
+ 502 words of extra memory for PDF output out of 10000 (max. 10000000)
 
