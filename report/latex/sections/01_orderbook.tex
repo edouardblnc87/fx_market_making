@@ -1,5 +1,85 @@
 \section{Order Book}
 \label{sec:orderbook}
-% Subject task 1 --- covers src/utils/order_book/.
-% TODO: data-structure justification (DataFrame-backed LOB, 10 levels, partial fills,
-% FillEvent producer/listener, matching rule client-vs-MM only).
+
+The order book of exchange $A$ must show a price and a quantity at ten
+levels on both sides at all times. This section describes the data
+structure we chose to hold that state, how submissions and
+cancellations flow through it, and the invariants of the matching
+engine. The design is exercised on a realistic EUR/USD seed
+(mid $=1.10$, $1$\,bp tick, ten levels per side, $1$M EUR per level).
+
+\subsection{Data structure}
+\label{sec:orderbook-ds}
+
+Two pressures shape the design. Matching requires a
+price-time-ordered view of the market-maker (MM) side at clearing
+time, yet the hot path is dominated by bulk requotes --- up to ten
+cancels followed by ten posts per step. Keeping the book permanently
+sorted would pay on every mutation for a benefit consumed only once
+per step.
+
+We therefore split orders by origin (MM versus client) into two
+hash-indexed stores and keep a price-ordered view of the MM side as a
+lazy cache, rebuilt only when the matcher runs. Cancels and posts
+touch only the hash stores; the MM side is sorted once per clearing
+call instead of being re-ordered on every mutation. Time priority
+within a price level is preserved by a counter that grows by one on
+every insertion, so later orders carry higher numbers than earlier
+ones.
+
+\subsection{Submissions and cancellations}
+\label{sec:orderbook-updates}
+
+The two sides are handled asymmetrically. MM cancels and posts arrive
+in bulk and never run the matcher, because passive quotes cannot
+cross by construction. Client orders are inserted one at a time, and
+the matcher runs immediately after each insertion.
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{orderbook_1.png}
+    \caption{Seeded book: one order per level, symmetric depth.}
+    \label{fig:orderbook-depth-seed}
+  \end{subfigure}\hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{orderbook_2.png}
+    \caption{After twenty marketable client orders: shallow levels
+    consumed from the top.}
+    \label{fig:orderbook-depth-post}
+  \end{subfigure}
+  \caption{Cumulative depth before and after a burst of client flow.}
+  \label{fig:orderbook-depth}
+\end{figure}
+
+\subsection{Matching rule}
+\label{sec:orderbook-match}
+
+Three invariants govern every clearing call. Client orders only
+match against MM orders, never against each other: as the sole
+designated market maker for Phases~1 and~2 we are on one side of
+every trade. The fill price is always the passive MM price,
+never the incoming aggressive price --- clients pay the spread we
+quote, which is the only source of gross revenue. And matching
+follows strict price-time priority with partial fills: the engine
+walks the sorted MM side, deducts the minimum of the two sizes, logs
+the match, and either retires the filled order or leaves the remnant
+resting. The residual shape in Figure~\ref{fig:orderbook-depth} is a
+direct visual check of this rule: the top of the book is consumed
+first, deeper levels are untouched.
+
+\subsection{Fills as events}
+\label{sec:orderbook-events}
+
+Every match is dispatched synchronously, as a fill event, to a single
+registered listener. In the full simulation the listener is the
+Quoter, which updates inventory, trade history, and the pending
+top-up queue inside the clearing call. The Quoter therefore never
+polls the book: the next quote computation already sees the post-fill
+inventory, which removes staleness bugs on steps that both fill and
+requote. Decoupling the book from its consumer also keeps the same
+engine usable in Phase~3, where a separate diagnostic listener
+records fills for the exchange-client-side liquidity analysis without
+touching the Phase~1 code path.

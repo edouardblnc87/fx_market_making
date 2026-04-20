@@ -16,23 +16,38 @@
 \newlabel{sec:intro-structure}{{1.5}{3}{Report Structure}{subsection.1.5}{}}
 \@writefile{toc}{\contentsline {section}{\numberline {2}Order Book}{4}{section.2}\protected@file@percent }
 \newlabel{sec:orderbook}{{2}{4}{Order Book}{section.2}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {3}Market Simulator for Venues B and C}{5}{section.3}\protected@file@percent }
-\newlabel{sec:market-simulator}{{3}{5}{Market Simulator for Venues B and C}{section.3}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {4}Market-Making Logic on Exchange A}{6}{section.4}\protected@file@percent }
-\newlabel{sec:quoter}{{4}{6}{Market-Making Logic on Exchange A}{section.4}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {5}Applying Submissions and Cancellations}{7}{section.5}\protected@file@percent }
-\newlabel{sec:book-updates}{{5}{7}{Applying Submissions and Cancellations}{section.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Simulation Loop}{8}{section.6}\protected@file@percent }
-\newlabel{sec:simulation-loop}{{6}{8}{Simulation Loop}{section.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Inventory and P\&L Tracking}{9}{section.7}\protected@file@percent }
-\newlabel{sec:pnl}{{7}{9}{Inventory and P\&L Tracking}{section.7}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {8}Phase 1 Backtest Report}{10}{section.8}\protected@file@percent }
-\newlabel{sec:backtest}{{8}{10}{Phase 1 Backtest Report}{section.8}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {9}Phase 2 --- Calibration from Trading History}{11}{section.9}\protected@file@percent }
-\newlabel{sec:phase2}{{9}{11}{Phase 2 --- Calibration from Trading History}{section.9}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{12}{section.10}\protected@file@percent }
-\newlabel{sec:phase3}{{10}{12}{Phase 3 --- Fallback Liquidity Under HFT Competition}{section.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Data structure}{4}{subsection.2.1}\protected@file@percent }
+\newlabel{sec:orderbook-ds}{{2.1}{4}{Data structure}{subsection.2.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Submissions and cancellations}{4}{subsection.2.2}\protected@file@percent }
+\newlabel{sec:orderbook-updates}{{2.2}{4}{Submissions and cancellations}{subsection.2.2}{}}
+\newlabel{fig:orderbook-depth-seed}{{1a}{4}{Seeded book: one order per level, symmetric depth}{figure.caption.2}{}}
+\newlabel{sub@fig:orderbook-depth-seed}{{a}{4}{Seeded book: one order per level, symmetric depth}{figure.caption.2}{}}
+\newlabel{fig:orderbook-depth-post}{{1b}{4}{After twenty marketable client orders: shallow levels consumed from the top}{figure.caption.2}{}}
+\newlabel{sub@fig:orderbook-depth-post}{{b}{4}{After twenty marketable client orders: shallow levels consumed from the top}{figure.caption.2}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Cumulative depth before and after a burst of client flow.}}{4}{figure.caption.2}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:orderbook-depth}{{1}{4}{Cumulative depth before and after a burst of client flow}{figure.caption.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Matching rule}{4}{subsection.2.3}\protected@file@percent }
+\newlabel{sec:orderbook-match}{{2.3}{4}{Matching rule}{subsection.2.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Fills as events}{5}{subsection.2.4}\protected@file@percent }
+\newlabel{sec:orderbook-events}{{2.4}{5}{Fills as events}{subsection.2.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Market Simulator for Venues B and C}{6}{section.3}\protected@file@percent }
+\newlabel{sec:market-simulator}{{3}{6}{Market Simulator for Venues B and C}{section.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Market-Making Logic on Exchange A}{7}{section.4}\protected@file@percent }
+\newlabel{sec:quoter}{{4}{7}{Market-Making Logic on Exchange A}{section.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Applying Submissions and Cancellations}{8}{section.5}\protected@file@percent }
+\newlabel{sec:book-updates}{{5}{8}{Applying Submissions and Cancellations}{section.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Simulation Loop}{9}{section.6}\protected@file@percent }
+\newlabel{sec:simulation-loop}{{6}{9}{Simulation Loop}{section.6}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Inventory and P\&L Tracking}{10}{section.7}\protected@file@percent }
+\newlabel{sec:pnl}{{7}{10}{Inventory and P\&L Tracking}{section.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Phase 1 Backtest Report}{11}{section.8}\protected@file@percent }
+\newlabel{sec:backtest}{{8}{11}{Phase 1 Backtest Report}{section.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Phase 2 --- Calibration from Trading History}{12}{section.9}\protected@file@percent }
+\newlabel{sec:phase2}{{9}{12}{Phase 2 --- Calibration from Trading History}{section.9}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{13}{section.10}\protected@file@percent }
+\newlabel{sec:phase3}{{10}{13}{Phase 3 --- Fallback Liquidity Under HFT Competition}{section.10}{}}
 \bibstyle{plainnat}
-\@writefile{toc}{\contentsline {section}{\numberline {11}Conclusion}{13}{section.11}\protected@file@percent }
-\newlabel{sec:conclusion}{{11}{13}{Conclusion}{section.11}{}}
-\gdef \@abspage@last{13}
+\@writefile{toc}{\contentsline {section}{\numberline {11}Conclusion}{14}{section.11}\protected@file@percent }
+\newlabel{sec:conclusion}{{11}{14}{Conclusion}{section.11}{}}
+\gdef \@abspage@last{14}

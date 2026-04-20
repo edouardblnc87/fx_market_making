@@ -1,5 +1,7 @@
 # Fdb version 4
-["pdflatex"] 1776681219.09167 "main.tex" "main.pdf" "main" 1776681219.88621 0
+["pdflatex"] 1776691264.57198 "main.tex" "main.pdf" "main" 1776691265.5419 0
+  "../images/orderbook_1.png" 1776689353.43146 62701 093d8dcb6051eccf14730c017030bac6 ""
+  "../images/orderbook_2.png" 1776689372.0524 59291 730ad95ec497b65070ac1b4b0283f457 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map" 1776677354.75836 81088 29d6fa367ac022d1b69251d68c0742e6 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecbx1200.pk" 1774795872.80758 31952 0e1f9d9b3d75b230c63f6529e0a80b10 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecbx1440.pk" 1774795875.32408 40136 6c4f996c9a73f5a2084ba2d135d320aa ""
@@ -99,12 +101,12 @@
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/units/nicefrac.sty" 1469029150 4163 98f285ced1c61c25144faeaf509fbad0 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/url/url.sty" 1388490452 12796 8edb7d69a20b857904dd0ea757c14ec9 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/xcolor/xcolor.sty" 1729265222 55384 b454dec21c2d9f45ec0b793f0995b992 ""
-  "main.aux" 1776681219.69061 3373 fb929874b70681d075a8a71ad1b477e7 "pdflatex"
-  "main.out" 1776681219.69251 2689 fdf7e1b0872bb449f25aae30b580887e "pdflatex"
+  "main.aux" 1776691265.33994 5068 8c2f8d995a569483bdeaf3a554b4fccc "pdflatex"
+  "main.out" 1776691265.34186 3294 bcadc677c1e6303f836579b37a7235db "pdflatex"
   "main.tex" 1776679630.25497 4118 269ceb67a3bfc14e3f5c7f58e9505a7b ""
-  "main.toc" 1776681219.6946 1320 1590deb44cfb46bb2d88db6797e008e7 "pdflatex"
-  "sections/00_introduction.tex" 1776681077.4351 5684 761e71fffebe7a9ee806a9e5f72764c2 ""
-  "sections/01_orderbook.tex" 1776677241.29648 245 27f6dfe5e0bd2dee40bac9516bad7524 ""
+  "main.toc" 1776691265.34446 1656 078156fa0f4843e320d03bbebaf01417 "pdflatex"
+  "sections/00_introduction.tex" 1776681598.26606 5591 c8291fe18e0569ae7be482a4a46e150c ""
+  "sections/01_orderbook.tex" 1776691137.36448 3838 4a57d56ed1d7e50bd71c583958c07936 ""
   "sections/02_market_simulator.tex" 1776677244.43935 308 7cdc67950f67fefc69d2dfe71d240509 ""
   "sections/03_quoter.tex" 1776677247.8983 353 f5c41dc84b526eeb5dd6f9fe56463fed ""
   "sections/04_book_updates.tex" 1776677250.55471 269 919910dffaaef646605149714f2f9b36 ""
