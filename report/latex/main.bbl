@@ -1,4 +1,4 @@
-\begin{thebibliography}{7}
+\begin{thebibliography}{8}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -28,6 +28,13 @@ Robert~F. Engle and Andrew~J. Patton.
 \newblock Impacts of trades in an error-correction model of quote prices.
 \newblock \emph{Journal of Financial Markets}, 7\penalty0 (1):\penalty0 1--25,
   2004.
+
+\bibitem[Gabaix et~al.(2003)Gabaix, Gopikrishnan, Plerou, and
+  Stanley]{gabaix2003theory}
+Xavier Gabaix, Parameswaran Gopikrishnan, Vasiliki Plerou, and H.~Eugene
+  Stanley.
+\newblock A theory of power-law distributions in financial market fluctuations.
+\newblock \emph{Nature}, 423\penalty0 (6937):\penalty0 267--270, 2003.
 
 \bibitem[Gu{\'e}ant(2017)]{gueant2017optimal}
 Olivier Gu{\'e}ant.

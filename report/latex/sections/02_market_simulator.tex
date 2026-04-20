@@ -111,12 +111,22 @@ price disagreement between venues.
 \subsection{Validation}
 \label{sec:ms-validation}
 
-Figure~\ref{fig:spread-regimes-garch} shows the five width paths under
-a GARCH-plus-jump run --- the one regime where the models visibly
-differentiate. Each width panel is annotated with its Pearson
-correlation to realized vol; the bottom panel shows the skew
-$\delta_t$ activating at each jump under the Skewed regime and
-remaining at zero elsewhere.
+Figure~\ref{fig:spread-regimes-garch} overlays the four retained
+regimes on a shared GARCH-plus-jump run --- the one fundamental where
+the models visibly differentiate. The top two panels plot ask and bid
+quotes for Static, Stochastic, Adaptive, and Skewed against the common
+mid; the four middle panels isolate each width path with a Pearson
+correlation to realized vol annotated in the title; the bottom panel
+shows the skew $\delta_t$ activating around the jump under the Skewed
+regime and remaining near zero elsewhere. The Static width is flat up
+to the mid-scaling factor, while Stochastic, Adaptive, and Skewed all
+co-move with $\widehat{RV}_t$ ($\rho \approx 1.00$, $1.00$, $0.97$),
+confirming the vol-adaptive mechanism fires as intended.
 
-\figplaceholder{spread-regimes-garch.png --- export from \texttt{market\_garch.compare\_spreads()} in \texttt{test/price\_simulation.ipynb}}{Width panels with realized-vol overlay and the Skew $\delta_t$ path, GARCH+jump run.}
-\label{fig:spread-regimes-garch}
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{spread-regimes-garch.png}
+  \caption{Ask and bid quotes, width panels with realized-vol overlay,
+  and the Skew $\delta_t$ path on a shared GARCH+jump run.}
+  \label{fig:spread-regimes-garch}
+\end{figure}

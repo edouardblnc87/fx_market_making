@@ -17,17 +17,24 @@
 \contentsline {subsection}{\numberline {3.3}Depth}{8}{subsection.3.3}%
 \contentsline {subsection}{\numberline {3.4}One stock, two venues}{8}{subsection.3.4}%
 \contentsline {subsection}{\numberline {3.5}Validation}{8}{subsection.3.5}%
-\contentsline {section}{\numberline {4}Market-Making Logic on Exchange A}{9}{section.4}%
-\contentsline {subsection}{\numberline {4.1}Fair mid under latency asymmetry}{9}{subsection.4.1}%
-\contentsline {subsection}{\numberline {4.2}Reservation price: Avellaneda--Stoikov with infinite horizon}{9}{subsection.4.2}%
-\contentsline {subsection}{\numberline {4.3}Three-component spread with fee floor}{9}{subsection.4.3}%
-\contentsline {subsection}{\numberline {4.4}Asymmetric skew and ladder}{10}{subsection.4.4}%
-\contentsline {subsection}{\numberline {4.5}Session-adaptive arrivals and selective requoting}{10}{subsection.4.5}%
-\contentsline {subsection}{\numberline {4.6}Hedge router}{11}{subsection.4.6}%
-\contentsline {section}{\numberline {5}Applying Submissions and Cancellations}{12}{section.5}%
-\contentsline {section}{\numberline {6}Simulation Loop}{13}{section.6}%
-\contentsline {section}{\numberline {7}Inventory and P\&L Tracking}{14}{section.7}%
-\contentsline {section}{\numberline {8}Phase 1 Backtest Report}{15}{section.8}%
-\contentsline {section}{\numberline {9}Phase 2 --- Calibration from Trading History}{16}{section.9}%
-\contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{17}{section.10}%
-\contentsline {section}{\numberline {11}Conclusion}{18}{section.11}%
+\contentsline {section}{\numberline {4}Market-Making Logic on Exchange A}{10}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Fair mid under latency asymmetry}{10}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Reservation price: Avellaneda--Stoikov with infinite horizon}{10}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Three-component spread with fee floor}{10}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Asymmetric skew and ladder}{11}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Selective re-quoting}{11}{subsection.4.5}%
+\contentsline {subsection}{\numberline {4.6}Hedge router}{12}{subsection.4.6}%
+\contentsline {section}{\numberline {5}Client Order Flow on Exchange A}{13}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Poisson arrivals with price-sensitive intensity}{13}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Market-versus-limit mix and limit placement}{13}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Heavy-tailed order sizes}{14}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Consumption by the order book}{15}{subsection.5.4}%
+\contentsline {section}{\numberline {6}Inventory and P\&L Tracking}{16}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Sign and fee convention}{16}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Realized versus mark-to-market}{16}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Inception spread versus mid-to-mid revaluation}{16}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Continuous MtM and final inventory}{17}{subsection.6.4}%
+\contentsline {section}{\numberline {7}Phase 1 Backtest Report}{18}{section.7}%
+\contentsline {section}{\numberline {8}Phase 2 --- Calibration from Trading History}{19}{section.8}%
+\contentsline {section}{\numberline {9}Phase 3 --- Fallback Liquidity Under HFT Competition}{20}{section.9}%
+\contentsline {section}{\numberline {10}Conclusion}{21}{section.10}%

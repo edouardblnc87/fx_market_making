@@ -129,30 +129,23 @@ accumulation. Exponential decay concentrates displayed liquidity at
 the top of book, consistent with the empirical shape of
 limit-order-book queues.
 
-\subsection{Session-adaptive arrivals and selective requoting}
+\subsection{Selective re-quoting}
 \label{sec:quoter-requote}
-
-EUR/USD trades across three active sessions --- Tokyo, London, New
-York --- with markedly different depth profiles. A single arrival
-decay $k$ calibrated on one session misprices fill probability on
-the others, since the same quoted distance attracts very different
-order flow under different liquidity regimes. We therefore apply
-session multipliers to $k$ (London deepest, Tokyo thinnest, New
-York as reference) and treat the $08{:}00$ and $16{:}00$ UTC
-transitions as hard resets of the full quote ladder so
-session-specific state does not bleed across regimes.
 
 Re-quoting every step is expensive in cancel/post messages and
 costly in time priority: orders that are still valid lose their
 queue position on every spurious cancel. We use a strict
 six-priority hierarchy, with each lower priority firing only if
-none above it did (Table~\ref{tab:quoter-requote}). Priority~3
-closes the price-drift leak; priority~5 closes a subtler
-silent-accumulation leak where market prices are flat but our own
-inventory has moved enough to invalidate the ladder skew. Priority~6
-fires on pure staleness and re-quotes at a tighter
-$0.7\times$ spread, so the refreshed quotes compete back into
-relevance rather than being re-posted at the same passive distance.
+none above it did (Table~\ref{tab:quoter-requote}). Priority~2
+treats the $08{:}00$ and $16{:}00$ UTC FX session boundaries as
+hard resets of the full ladder, so session-specific state does not
+accumulate across regimes. Priority~3 closes the price-drift leak;
+priority~5 closes a subtler silent-accumulation leak where market
+prices are flat but our own inventory has moved enough to
+invalidate the ladder skew. Priority~6 fires on pure staleness and
+re-quotes at a tighter $0.7\times$ spread, so the refreshed quotes
+compete back into relevance rather than being re-posted at the
+same passive distance.
 
 \begin{table}[H]
   \centering
