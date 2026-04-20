@@ -53,12 +53,14 @@ def compute_rv_zero_mean(true_path: np.ndarray, window_size: int, dt: float) -> 
     # per-step vol scaled to annual — this is the prior a market maker would use
     rv_ann[:window_size] = np.sqrt(sigma_step_sq) * C_ann
 
-    # Rolling window from window_size onward: zero-mean estimator
-    # RVar(t) = mean of squared log-returns over the last window_size steps
-    for t in range(window_size, len(true_path)):
-        r_window = log_returns[t - window_size : t]     # last window_size returns
-        rvar     = np.mean(r_window ** 2)               # zero-mean realized variance
-        rv_ann[t] = np.sqrt(rvar) * C_ann              # annualize
+    # Vectorized rolling sum using cumulative sum — O(N) regardless of window_size.
+    # cumr2[i+1] - cumr2[i-w+1] = sum of r^2 over [i-w+1, i] (w elements)
+    r2    = log_returns ** 2
+    cumr2 = np.empty(len(r2) + 1)
+    cumr2[0] = 0.0
+    np.cumsum(r2, out=cumr2[1:])
+    rvar = (cumr2[window_size:] - cumr2[:-window_size]) / window_size
+    rv_ann[window_size:] = np.sqrt(rvar) * C_ann
 
     return rv_ann
 

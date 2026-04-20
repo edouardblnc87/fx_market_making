@@ -264,6 +264,11 @@ class DiagnosticsReport:
         ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=7.5, loc="upper right", ncol=2)
         _ax_style(ax1, ylabel="bps",
                   title="Spread A vs B  +  realised vol  —  does spread track vol? (it should)")
+        ax1.text(0.01, 0.03,
+                 "Spread A (our quotes) should widen when vol rises and stay above spread B (reference market).\n"
+                 "A flat spread during volatile periods means gamma is too low.",
+                 transform=ax1.transAxes, ha="left", va="bottom",
+                 fontsize=6.5, color=_REF, style="italic")
 
         # ── Panel 2: Ask offset and bid offset from fair_mid ────────────────
         ax2.plot(t, ask_offset, color=_ASK, lw=0.7, label="Ask offset from fair (bps)")
@@ -277,6 +282,12 @@ class DiagnosticsReport:
         _ax_style(ax2, ylabel="bps from fair_mid",
                   title="Ask & bid leg distance from fair_mid  —  symmetric = no skew, diverging = inventory pressure")
         ax2.legend(fontsize=7.5, ncol=2)
+        ax2.text(0.01, 0.03,
+                 "Each leg's distance from fair_mid in bps.  Equal legs = neutral.  "
+                 "Ask > bid → long inventory pushing ask up.  "
+                 "Skew is driven by alpha_spread × inventory.",
+                 transform=ax2.transAxes, ha="left", va="bottom",
+                 fontsize=6.5, color=_REF, style="italic")
 
         # ── Panel 3: Leg difference vs inventory ────────────────────────────
         ax3.plot(t, leg_diff, color=_SPR, lw=0.7,
@@ -337,6 +348,12 @@ class DiagnosticsReport:
         _ax_style(ax1, xlabel="Time (s)", ylabel="fills / s",
                   title="Rolling fill rate  (10-min window)  vs theoretical λ")
         ax1.legend(fontsize=7.5)
+        ax1.text(0.01, 0.97,
+                 "How many client orders fill per second, averaged over 10 min.\n"
+                 "Should track the dashed theoretical λ = A·exp(−k·δ).  "
+                 "Persistent gap → spread too wide (below λ) or too tight (above λ).",
+                 transform=ax1.transAxes, ha="left", va="top",
+                 fontsize=6.5, color=_REF, style="italic")
 
         # ── Fill size histogram ─────────────────────────────────────────────
         if len(mf):
@@ -345,6 +362,10 @@ class DiagnosticsReport:
         ax2.set_xlabel("Fill size (kEUR)", color=_TXT)
         ax2.set_ylabel("Count", color=_TXT)
         _ax_style(ax2, title="Fill size distribution")
+        ax2.text(0.97, 0.97,
+                 "Client order sizes.\nExpect a heavy-tailed (Pareto-like)\ndistribution.",
+                 transform=ax2.transAxes, ha="right", va="top",
+                 fontsize=6.5, color=_REF, style="italic")
 
         # ── Rolling direction imbalance ─────────────────────────────────────
         if len(mf):
@@ -365,6 +386,12 @@ class DiagnosticsReport:
                   title="Order-flow imbalance  (50-fill rolling)  — should mean-revert around 0")
         if len(mf):
             ax3.legend(fontsize=7.5)
+        ax3.text(0.01, 0.97,
+                 "Running average of fill direction (+1 = buy, −1 = sell) over the last 50 fills.\n"
+                 "Should oscillate around 0.  Sustained bias signals one-sided client pressure "
+                 "or a spread skew issue.",
+                 transform=ax3.transAxes, ha="left", va="top",
+                 fontsize=6.5, color=_REF, style="italic")
 
         # ── Level utilisation ───────────────────────────────────────────────
         if len(mf):
@@ -377,6 +404,11 @@ class DiagnosticsReport:
                          ha="center", va="bottom", fontsize=7, color=_TXT)
         _ax_style(ax4, xlabel="Level", ylabel="Fills",
                   title="Fills per quote level\n(L1 should dominate)")
+        ax4.text(0.97, 0.97,
+                 "L1 = best quote; L2+ = deeper\nladder levels hit by large orders.\n"
+                 "High L2+ share → client orders\nregularly sweep past L1.",
+                 transform=ax4.transAxes, ha="right", va="top",
+                 fontsize=6.5, color=_REF, style="italic")
 
         plt.tight_layout()
         plt.show()
@@ -440,24 +472,54 @@ class DiagnosticsReport:
         ax_sum.legend(fontsize=8)
 
         # ── Context windows ─────────────────────────────────────────────────
+        # Each panel shows ±5 min around the hedge: inventory (left axis),
+        # mid price (right axis), and any fills that happened in that window.
+        window_tight = max(1, int(300 / dt))   # ±5-min window (tighter = more dynamics visible)
         for i, hs in enumerate(hsteps):
             row_i = 1 + i // ncols
             col_i = i % ncols
             ax = fig.add_subplot(gs[row_i, col_i])
 
-            lo = max(0, hs - window)
-            hi = min(len(sl) - 1, hs + window)
+            lo = max(0, hs - window_tight)
+            hi = min(len(sl) - 1, hs + window_tight)
             chunk = sl.iloc[lo:hi]
             tc    = chunk[t_col].values
             inv_c = chunk["inventory"].values
 
-            ax.plot(tc, inv_c / 1e3, color=_INV, lw=0.9)
-            ax.axhline( self.limit / 1e3, color=_ASK, lw=1, ls="--")
-            ax.axhline(-self.limit / 1e3, color=_ASK, lw=1, ls="--")
+            # Inventory (left axis)
+            ax.plot(tc, inv_c / 1e3, color=_INV, lw=1.1, label="Inv (kEUR)")
+            ax.axhline( self.limit / 1e3, color=_ASK, lw=0.8, ls="--")
+            ax.axhline(-self.limit / 1e3, color=_ASK, lw=0.8, ls="--")
             ax.axhline(0, color=_REF, lw=0.5)
 
-            # mark the hedge step
-            hs_t = float(sl[sl["step"] == hs][t_col].iloc[0]) if len(sl[sl["step"] == hs]) else hs
+            # Mid price (right axis)
+            axr = ax.twinx()
+            axr.plot(tc, chunk["fair_mid"].values, color=_MID, lw=0.7,
+                     alpha=0.7, label="Fair mid")
+            axr.set_ylabel("Price", color=_MID, fontsize=7)
+            axr.tick_params(colors=_MID, labelsize=6)
+            axr.set_facecolor(_AX)
+
+            # Fills in this window
+            hs_t = float(sl[sl["step"] == hs][t_col].iloc[0]) if len(sl[sl["step"] == hs]) else float(hs)
+            t_lo_w = tc[0] if len(tc) else hs_t - 300
+            t_hi_w = tc[-1] if len(tc) else hs_t + 300
+            t_fill_col = "t" if "t" in self.mm_fills.columns else "step"
+            fills_win = self.mm_fills[
+                (self.mm_fills[t_fill_col] >= t_lo_w) &
+                (self.mm_fills[t_fill_col] <= t_hi_w)
+            ]
+            if len(fills_win):
+                f_buys  = fills_win[fills_win["direction"] == "buy"]
+                f_sells = fills_win[fills_win["direction"] == "sell"]
+                if len(f_buys):
+                    ax.scatter(f_buys[t_fill_col], f_buys["size"] * 0 + self.limit * 0.02 / 1e3,
+                               marker="^", s=22, color=_BID, zorder=4, alpha=0.8)
+                if len(f_sells):
+                    ax.scatter(f_sells[t_fill_col], f_sells["size"] * 0 - self.limit * 0.02 / 1e3,
+                               marker="v", s=22, color=_ASK, zorder=4, alpha=0.8)
+
+            # Hedge moment vertical line
             ax.axvline(hs_t, color=_HED, lw=1.5, ls="--")
 
             idx = np.searchsorted(chunk["step"].values, hs, side="right") - 1
@@ -468,7 +530,7 @@ class DiagnosticsReport:
                         fontsize=7.5, color=_HED)
 
             _ax_style(ax, xlabel="Time (s)", ylabel="kEUR",
-                      title=f"Hedge {i+1}  (±30 min)")
+                      title=f"Hedge {i+1}  (±5 min)\ninv (purple) · price (blue) · fills (▲▼)")
 
         plt.tight_layout()
         plt.show()

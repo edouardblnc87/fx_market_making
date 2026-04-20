@@ -105,13 +105,9 @@ class Market(object):
         self._rv_sto     = vol_realized
         self._window_sto = window_size
 
-        # EMA-smooth vol so spread width reflects regime changes, not tick-by-tick noise
-        smooth_span = max(window_size * 18, 1)
-        vol_smooth = pd.Series(vol_realized).ewm(span=smooth_span, adjust=False).mean().to_numpy()
-
-        # Normalized formula: spread scales with vol ratio → price-independent
-        # alpha=0.5: at 2× vol, half-spread = 2× spread_0 (doubles); at normal vol = 1.5× spread_0
-        spread = np.round(spread_0 * (1.0 + alpha * vol_smooth / self.stock.vol), 8)
+        # Use rolling vol directly — no EMA. Set window_size at regime scale
+        # (e.g. int(120/dt)) so the estimate is already smooth.
+        spread = np.round(spread_0 * (1.0 + alpha * vol_realized / self.stock.vol), 8)
 
         self.ask_price_sto = self.noised_mid_price + spread
         self.bid_price_sto = self.noised_mid_price - spread
@@ -125,13 +121,9 @@ class Market(object):
         vol_realized = self.stock.compute_realized_volatility(window_size=window_size)
         vol_realized[:window_size] = self.stock.vol
 
-        # EMA-smooth vol so spread width reflects regime changes, not tick-by-tick noise
-        smooth_span = max(window_size * 18, 1)
-        vol_smooth = pd.Series(vol_realized).ewm(span=smooth_span, adjust=False).mean().to_numpy()
-
-        # Adaptive: spread = spread_0 at normal vol, widens above, tightens below.
-        # alpha=0.5: at 2× vol → spread_0 * 1.5; at 0.5× vol → spread_0 * 0.75
-        spread = np.round(spread_0 * (1.0 + alpha * (vol_smooth / self.stock.vol - 1.0)), 8)
+        # Use rolling vol directly — no EMA. Set window_size at regime scale
+        # (e.g. int(120/dt)) so the estimate is already smooth.
+        spread = np.round(spread_0 * (1.0 + alpha * (vol_realized / self.stock.vol - 1.0)), 8)
 
         # Floor at 10% of baseline to prevent spread collapsing near zero
         spread = np.maximum(spread, spread_0 * 0.1)
@@ -167,9 +159,9 @@ class Market(object):
         ----------
         s0          : static floor half-spread in price units.
                       Defaults to 1 tick (tick_size * 1).
-        alpha       : spread sensitivity to vol (price / annualized vol).
-                      Defaults to S_0 / (2 * sigma_ann) so that a 2-sigma vol event
-                      doubles the spread — see doc section 12.
+        alpha       : dimensionless spread sensitivity to vol (same convention as
+                      stochastic/adaptive models). At normal vol S_star = α·h_0.
+                      Default 0.5 → spread = 1.5×baseline at normal vol.
         kappa_u     : upward reversion speed in 1/s. Default 50 → half-life ~14ms.
         kappa_d     : downward reversion speed in 1/s. Default 2 → half-life ~350ms.
         window_size : lookback steps for the rolling realized vol estimate.
@@ -192,16 +184,16 @@ class Market(object):
             s0 = self.noised_mid_price * spread_bps / 10_000
 
         # ── Step 5: Alpha calibration ──────────────────────────────────────────
-        # Default rule from doc section 12: a 2-sigma vol event doubles the spread
-        # alpha = S_0 / (2 * sigma_ann), where sigma_ann is the input annual vol
+        # alpha is dimensionless, same convention as stochastic/adaptive models.
+        # At normal vol (RV = σ): S_star = α · h_0, so total spread = (1+α) · 2h_0.
+        # At 2× vol: S_star = 2α · h_0, so total spread = (1+2α) · 2h_0.
         if alpha is None:
-            alpha = s0 / (2 * self.stock.vol)
+            alpha = 0.5
 
         # ── Step 6: Vol-driven target excess spread ────────────────────────────
-        # S_star(t) = alpha * RV_ann(t)
-        # When RV = input vol → S_star ≈ S_0/2, so total spread ≈ 1.5 * S_0
-        # When RV = 2 * input vol → S_star ≈ S_0, so total spread ≈ 2 * S_0
-        s_star = alpha * rv_ann
+        # S_star(t) = α · h_0(t) · RV_ann(t) / σ
+        # Normalized by σ so alpha is scale-free (same as stochastic/adaptive).
+        s_star = s0 * alpha * rv_ann / self.stock.vol
 
         # ── Step 7: Evolve S_excess forward (sequential, asymmetric) ──────────
         # kappa_u >> kappa_d: widening is fast (adverse selection fear),
@@ -262,19 +254,20 @@ class Market(object):
         N  = self.stock.n_steps
 
         # --- Vol-adaptive half-spread width ---
+        # window_size should be set at regime scale (e.g. int(120/dt) for 2 min).
+        # The rolling window is already smooth at that scale — no EMA needed.
+        # corr(width, RV) will be high because width IS proportional to rv_ann.
         rv_ann   = compute_rv_zero_mean(self.stock.simulation, window_size, dt)
         spread_0 = self.noised_mid_price * spread_bps / 10_000
 
-        # Cap rv_ann at 3× the parametric vol before smoothing.
-        rv_ann_capped = np.minimum(rv_ann, 3.0 * self.stock.vol)
+        # Cap at 5× parametric vol: preserves GARCH clusters (2–4×) while
+        # preventing single-step jumps from permanently widening the spread.
+        rv_ann_capped = np.minimum(rv_ann, 5.0 * self.stock.vol)
 
-        # EMA-smooth the vol estimate so spread width moves slowly (regime changes)
-        # rather than wiggling at tick frequency. Span = 18× the rolling window.
-        smooth_span = max(window_size * 18, 1)
-        rv_smooth = pd.Series(rv_ann_capped).ewm(span=smooth_span, adjust=False).mean().to_numpy()
-
-        # Scale half-spread by smoothed vol level relative to parametric vol.
-        half_spread   = spread_0 * (1.0 + alpha * rv_smooth / self.stock.vol)
+        # Use the rolling estimate directly — no additional EMA smoothing.
+        # EMA smoothing on top of a long rolling window would decorrelate
+        # width from RV (corr(x, EMA(x,span)) → 0 as span grows).
+        half_spread = spread_0 * (1.0 + alpha * rv_ann_capped / self.stock.vol)
 
         # --- EMA momentum signal ---
         log_rets = np.diff(np.log(self.noised_mid_price))   # shape (N,)

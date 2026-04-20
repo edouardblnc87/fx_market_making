@@ -165,7 +165,9 @@ class CalibratedConfigBuilder:
         if not self.diagnostics:
             return "No calibration run yet — call build() first."
 
-        d = self.diagnostics
+        d   = self.diagnostics
+        cfg = QuoterConfig()   # default instance — single source of truth
+
         lines = [
             "=" * 68,
             "  CALIBRATION SUMMARY — Phase 1 → Phase 2  (QuoterConfig only)",
@@ -176,25 +178,27 @@ class CalibratedConfigBuilder:
         ]
 
         rows = [
-            ("gamma",           "0.1",       d["gamma"]["gamma"]),
-            ("omega",           f"{1/(8*3600):.2e}", d["gamma"]["omega"]),
-            ("vol_window_s",    "60.0",      d["volatility_ewma"]["vol_window_s"]),
-            ("alpha_spread",    "0.5",       d["spread"]["alpha_spread"]),
-            ("alpha_imbalance", "0.0002",    d["spread"]["alpha_imbalance"]),
-            ("k",               "0.3",       d["k"]["k"]),
-            ("k_buy",           "0.3",       d["k"]["k_buy"]),
-            ("k_sell",          "0.3",       d["k"]["k_sell"]),
-            ("beta",            "0.3",       d["ladder"]["beta"]),
-            ("Q_base",          "100000",    d["ladder"]["Q_base"]),
+            ("gamma",           cfg.gamma,            d["gamma"]["gamma"]),
+            ("omega",           cfg.omega,             d["gamma"]["omega"]),
+            ("vol_window_s",    cfg.vol_window_s,      d["volatility_ewma"]["vol_window"] * self._dt),
+            ("alpha_spread",    cfg.alpha_spread,      d["spread"]["alpha_spread"]),
+            ("alpha_imbalance", cfg.alpha_imbalance,   d["spread"]["alpha_imbalance"]),
+            ("k",               cfg.k,                 d["k"]["k"]),
+            ("k_buy",           0.3,                   d["k"]["k_buy"]),
+            ("k_sell",          0.3,                   d["k"]["k_sell"]),
+            ("beta",            cfg.beta,              d["ladder"]["beta"]),
+            ("Q_base",          cfg.Q_base,            d["ladder"]["Q_base"]),
+            ("stale_s",         cfg.stale_s,           d["stale"]["stale_s"]),
             ("target_sweep",    "n/a",       d["ladder"]["target_sweep"]),
-            ("stale_s",         "3.0",       d["stale"]["stale_s"]),
         ]
 
         for name, default, calibrated in rows:
-            if name == "target_sweep":
-                lines.append(f"  {name:<25} {default:>12} {calibrated:>11.1%}")
-            else:
-                lines.append(f"  {name:<25} {default:>12} {calibrated:>12.6g}")
+            try:
+                lines.append(f"  {name:<25} {default:>12.6g} {calibrated:>12.6g}")
+            except:
+                lines.append(f"  {name:<25} {default:>12} {calibrated:>12}")
+
+
 
         lines.append("")
         lines.append(f"  Expected daily Sharpe: {d['gamma']['expected_sharpe']:.3f}")
