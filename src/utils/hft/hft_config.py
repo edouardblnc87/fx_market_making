@@ -12,10 +12,20 @@ class HFTConfig:
 
     # Profitability check — global OFFLINE trigger
     # Both sides unprofitable → OFFLINE.
-    # Per-side check in step() decides ONE_SIDED vs ACTIVE.
+    # ONE_SIDED is exclusively schedule/trend-driven (see hft_agent._update_state).
     fee_A_maker:              float = 0.0002  # maker fee on A
     min_net_half_spread_bps:  float = 0.3     # min net profit per side to justify quoting
 
     # Secondary OFFLINE trigger — extreme vol stress only
-    vol_offline_threshold:    float = 0.35    # annualised vol → OFFLINE
+    # Calibration guide: set to ~2× baseline annualised vol so GARCH clusters trigger it.
+    #   vol=0.07 (phase 2 / realistic EUR/USD) → threshold=0.12
+    vol_offline_threshold:    float = 0.12    # annualised vol → OFFLINE
     recovery_s:               float = 30.0    # seconds offline before returning ACTIVE
+
+    # ONE_SIDED trigger — adverse selection from stale pricing
+    # Uptrend → ask is stale-cheap → remove ask → ONE_SIDED_BID
+    # Downtrend → bid is stale-expensive → remove bid → ONE_SIDED_ASK
+    # Calibration guide: set to ~1.5σ over trend_window_s.
+    #   vol=0.07, window=5s → 5s σ ≈ 0.28 bps → threshold=0.4 bps (~13% of steps)
+    trend_window_s:           float = 5.0     # lookback window
+    trend_threshold_bps:      float = 0.4     # move size to trigger one-sided

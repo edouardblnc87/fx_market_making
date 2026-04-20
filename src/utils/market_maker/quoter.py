@@ -47,7 +47,7 @@ class QuoterConfig:
 
     # Requote triggers
     requote_threshold_spread_fraction: float = 0.25
-    stale_s: float = 40.0            # seconds before Priority 6 fires (was stale_steps)
+    stale_s: float = 10.0            # seconds before Priority 6 fires (was stale_steps)
     stale_tight_fraction: float = 0.7  # reprice stale orders at 70% of normal half_spread
     # Inventory-change trigger: force a requote when |inventory| has moved by more than this fraction of capital_K since the last reprice, even if prices are flat.
     inventory_requote_fraction: float = 0.05
@@ -77,7 +77,7 @@ class QuoterConfig:
     # expressed as a fraction of each half independently.
     # e.g. delta_limit=0.90 → hedge fires when |EUR inventory| > 0.90 × (K/2)
     #                        OR |EUR inv × price| (USD notional) > 0.90 × (K/2)
-    delta_limit: float = 0.60
+    delta_limit: float = 0.90
     hedge_partial_limit: float = 0.80
     emergency_penalty_multiplier: float = 5.0
     # EOD flat: force inventory to zero every eod_flat_interval seconds.

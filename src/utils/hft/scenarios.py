@@ -30,8 +30,7 @@ ISOLATED: dict[str, tuple[HFTConfig, list[ScheduledEvent]]] = {
     ),
     "vol_spike": (
         HFTConfig(
-            vol_offline_threshold=0.22,    # offline above 22% annualized vol (vs default 35%)
-            min_net_half_spread_bps=1.0,   # more selective on profitability
+            vol_offline_threshold=0.28,    # offline above 28% annualized vol (vs default 35%)
         ),
         [],
     ),
@@ -43,21 +42,35 @@ ISOLATED: dict[str, tuple[HFTConfig, list[ScheduledEvent]]] = {
         ],
     ),
     "hft_offline": (
-        HFTConfig(spread_fraction=999.0),  # spread_fraction so high it never quotes
+        HFTConfig(min_net_half_spread_bps=1e9),  # profitability check always fails → always OFFLINE
         [],
     ),
 }
 
-# ── Realistic month schedule (for the continuous 30-day run) ─────────────────
-# Forced state overrides; between events HFT is ACTIVE (natural triggers still apply).
+# ── Realistic schedule — scales to any n_days ────────────────────────────────
+# Events defined as fractions of total period so frequency is preserved
+# regardless of simulation length.  Call make_realistic_schedule(n_days).
 
-REALISTIC_MONTH: list[ScheduledEvent] = [
-    ScheduledEvent(3.0,  0.5, HFTState.OFFLINE),         # brief outage day 3
-    ScheduledEvent(7.0,  1.5, HFTState.ONE_SIDED_BID),   # inventory squeeze day 7–8
-    ScheduledEvent(12.0, 3.0, HFTState.OFFLINE),         # major outage days 12–15
-    ScheduledEvent(17.0, 2.0, HFTState.ONE_SIDED_ASK),   # reverse squeeze days 17–19
-    ScheduledEvent(20.5, 0.3, HFTState.OFFLINE),         # vol spike day 20
-    ScheduledEvent(24.0, 2.5, HFTState.ONE_SIDED_BID),   # days 24–26
-    ScheduledEvent(26.5, 0.3, HFTState.OFFLINE),         # vol spike day 26
-    ScheduledEvent(28.0, 1.5, HFTState.ONE_SIDED_ASK),   # final squeeze days 28–29
+_SCHEDULE_TEMPLATE: list[tuple[float, float, HFTState]] = [
+    # (start_fraction, duration_fraction, state)
+    (0.10, 0.017, HFTState.OFFLINE),         # brief outage ~10% through
+    (0.23, 0.050, HFTState.ONE_SIDED_BID),   # inventory squeeze ~23–28%
+    (0.40, 0.100, HFTState.OFFLINE),         # major outage ~40–50%
+    (0.57, 0.067, HFTState.ONE_SIDED_ASK),   # reverse squeeze ~57–64%
+    (0.68, 0.010, HFTState.OFFLINE),         # vol spike ~68%
+    (0.80, 0.083, HFTState.ONE_SIDED_BID),   # squeeze ~80–88%
+    (0.88, 0.010, HFTState.OFFLINE),         # vol spike ~88%
+    (0.93, 0.050, HFTState.ONE_SIDED_ASK),   # final squeeze ~93–98%
 ]
+
+
+def make_realistic_schedule(n_days: float = 30.0) -> list[ScheduledEvent]:
+    """Return a schedule scaled to n_days, preserving relative timing and durations."""
+    return [
+        ScheduledEvent(frac * n_days, dur * n_days, state)
+        for frac, dur, state in _SCHEDULE_TEMPLATE
+    ]
+
+
+# Convenience alias for the classic 30-day run
+REALISTIC_MONTH: list[ScheduledEvent] = make_realistic_schedule(30.0)

@@ -31,11 +31,8 @@ class HFTAgent:
       2. Recovery timer: OFFLINE → ACTIVE after recovery_s
       3. Global: net A half-spread < min_net_half_spread_bps → OFFLINE
       4. Global: sigma > vol_offline_threshold → OFFLINE
-      5. Per-side competitiveness vs lagged B/C:
-           hft_bid < bid_B → ONE_SIDED_ASK (bid undercut by B, only ask is competitive)
-           hft_ask > ask_B → ONE_SIDED_BID (ask undercut by B, only bid is competitive)
-           both uncompetitive → OFFLINE (extreme B/C move, very rare)
-           both competitive  → ACTIVE
+      5. Otherwise → ACTIVE (both sides quoted)
+      ONE_SIDED is exclusively schedule-driven.
     """
 
     def __init__(
@@ -57,8 +54,9 @@ class HFTAgent:
         self._weight_C  = weight_C
 
         dt = market_B.stock.time_step
-        self._dt  = dt
-        self._lag = max(1, round(config.latency_s / dt))
+        self._dt          = dt
+        self._lag         = max(1, round(config.latency_s / dt))
+        self._trend_steps = max(1, round(config.trend_window_s / dt))
 
         self.state: HFTState = HFTState.ACTIVE
         self._inventory: float = 0.0
@@ -77,12 +75,19 @@ class HFTAgent:
         self._k:     float = 0.3
         self._inv_horizon_y: float = 1.0 / (self._omega * TRADING_SECONDS_PER_YEAR)
         self._two_over_gamma: float = 2.0 / self._gamma
+        self._log_term: float = np.log(1.0 + self._gamma / self._k)  # constant: never changes
         self._sigma: float = market_B.stock.vol   # updated each step via EWMA
 
         # Lightweight EWMA variance for vol estimation
         self._ewma_var: float | None = None
         self._ewma_prev_price: float | None = None
         self._dt_frac: float = dt / TRADING_SECONDS_PER_YEAR
+        self._inv_dt_frac: float = TRADING_SECONDS_PER_YEAR / dt  # avoids division in _update_vol
+        self._ewma_alpha: float = 2.0 / (600 + 1)                 # constant EWMA span
+
+        # Precomputed config-derived constants
+        self._inv_tick: float = 1.0 / TICK_SIZE        # avoids division in _snap (called 2×/step)
+        self._fee_bps: float = config.fee_A_maker * 1e4  # avoids multiplication in _update_state
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -95,14 +100,19 @@ class HFTAgent:
         # 2. Update vol estimate
         self._update_vol(step)
 
-        # 3. Determine state for this step (passes step for trend computation)
-        self._update_state(t)
+        # 3. Compute spread_AS_bps and stale index once — shared with _update_state
+        sigma = self._sigma
+        spread_AS_bps = (
+            self._gamma * sigma * sigma * 1e4 * self._inv_horizon_y
+            + self._two_over_gamma * self._log_term
+        )
+        stale = max(0, step - self._lag)
+        self._update_state(t, step, stale, spread_AS_bps)
 
         if self.state == HFTState.OFFLINE:
             return
 
-        # 4. Read B/C with HFT latency lag
-        stale = max(0, step - self._lag)
+        # 4. Read B/C with HFT latency lag (stale already computed above)
         bid_B = float(self._market_B.bid_price[stale])
         ask_B = float(self._market_B.ask_price[stale])
         bid_C = float(self._market_C.bid_price[stale])
@@ -112,41 +122,19 @@ class HFTAgent:
             + self._weight_C * (bid_C + ask_C) * 0.5
         )
 
-        # 5. Compute tight half-spread (A-S formula × spread_fraction)
-        sigma = self._sigma
-        spread_AS_bps = (
-            self._gamma * (sigma * 100.0) ** 2 * self._inv_horizon_y
-            + self._two_over_gamma * np.log(1.0 + self._gamma / self._k)
-        )
+        # 5. Tight half-spread (A-S × spread_fraction; spread_AS_bps already computed)
         half_spread = max(
             spread_AS_bps / 10_000.0 * fair_mid * self.cfg.spread_fraction,
             TICK_SIZE,
         )
 
-        # 6a. Compute symmetric quotes
+        # 6. Quote symmetrically
         best_bid = self._snap(fair_mid - half_spread)
         best_ask = self._snap(fair_mid + half_spread)
         if best_bid >= best_ask:
             best_ask = best_bid + TICK_SIZE
 
-        # 6b. Per-side competitiveness check vs lagged B/C prices.
-        # Quote a side only if our A price beats B's best price on that side,
-        # so clients have a reason to trade with us rather than going to B.
-        bid_ok = best_bid >= bid_B
-        ask_ok = best_ask <= ask_B
-
-        if bid_ok and ask_ok:
-            self.state = HFTState.ACTIVE
-        elif bid_ok:
-            self.state = HFTState.ONE_SIDED_BID
-        elif ask_ok:
-            self.state = HFTState.ONE_SIDED_ASK
-        else:
-            self.state = HFTState.OFFLINE
-            self._offline_since_t = t
-            return
-
-        # 7. Post orders based on state
+        # 7. Post orders based on state (set by _update_state)
         size = self.cfg.max_depth_eur
         if self.state in (HFTState.ACTIVE, HFTState.ONE_SIDED_BID):
             oid = generate_order_id()
@@ -177,7 +165,7 @@ class HFTAgent:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _update_state(self, t: float) -> None:
+    def _update_state(self, t: float, step: int, stale_now: int, spread_AS_bps: float) -> None:
         # Schedule override takes priority
         day = t / 86_400.0
         for event in self._schedule:
@@ -197,14 +185,7 @@ class HFTAgent:
             return
 
         # ── Primary trigger: profitability check ─────────────────────────────
-        # HFT quotes on A only if the net half-spread after fees covers min profit.
-        spread_AS_bps = (
-            self._gamma * (self._sigma * 100.0) ** 2 * self._inv_horizon_y
-            + self._two_over_gamma * np.log(1.0 + self._gamma / self._k)
-        )
-        half_spread_bps = spread_AS_bps * self.cfg.spread_fraction
-        fee_bps         = self.cfg.fee_A_maker * 1e4
-        if half_spread_bps - fee_bps < self.cfg.min_net_half_spread_bps:
+        if spread_AS_bps * self.cfg.spread_fraction - self._fee_bps < self.cfg.min_net_half_spread_bps:
             self.state = HFTState.OFFLINE
             self._offline_since_t = t
             return
@@ -214,6 +195,24 @@ class HFTAgent:
             self.state = HFTState.OFFLINE
             self._offline_since_t = t
             return
+
+        # ── Directional trend → adverse selection avoidance ──────────────────
+        stale_past = max(0, stale_now - self._trend_steps)
+        try:
+            curr_mid = (float(self._market_B.bid_price[stale_now])
+                        + float(self._market_B.ask_price[stale_now])) * 0.5
+            past_mid = (float(self._market_B.bid_price[stale_past])
+                        + float(self._market_B.ask_price[stale_past])) * 0.5
+            if past_mid > 0:
+                move_bps = (curr_mid - past_mid) / past_mid * 1e4
+                if move_bps > self.cfg.trend_threshold_bps:
+                    self.state = HFTState.ONE_SIDED_BID
+                    return
+                if move_bps < -self.cfg.trend_threshold_bps:
+                    self.state = HFTState.ONE_SIDED_ASK
+                    return
+        except (IndexError, AttributeError):
+            pass
 
         self.state = HFTState.ACTIVE
 
@@ -230,11 +229,10 @@ class HFTAgent:
         if p0 <= 0:
             return
         r = np.log(p1 / p0)
-        alpha = 2.0 / (600 + 1)   # 600-step EWMA span (fixed, lightweight)
         v = r * r
-        self._ewma_var = v if self._ewma_var is None else alpha * v + (1 - alpha) * self._ewma_var
+        self._ewma_var = v if self._ewma_var is None else self._ewma_alpha * v + (1 - self._ewma_alpha) * self._ewma_var
         if self._ewma_var is not None:
-            self._sigma = max(np.sqrt(self._ewma_var / self._dt_frac), 1e-6)
+            self._sigma = max(np.sqrt(self._ewma_var * self._inv_dt_frac), 1e-6)
 
     def _snap(self, price: float) -> float:
-        return round(round(price / TICK_SIZE) * TICK_SIZE, 6)
+        return round(round(price * self._inv_tick) * TICK_SIZE, 6)

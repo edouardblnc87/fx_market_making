@@ -180,7 +180,7 @@ class CalibratedConfigBuilder:
         rows = [
             ("gamma",           cfg.gamma,            d["gamma"]["gamma"]),
             ("omega",           cfg.omega,             d["gamma"]["omega"]),
-            ("vol_window_s",    cfg.vol_window_s,      d["volatility_ewma"]["vol_window"] * self._dt),
+            ("vol_window_s",    cfg.vol_window_s,      d["volatility_ewma"]["vol_window_s"] * self._dt),
             ("alpha_spread",    cfg.alpha_spread,      d["spread"]["alpha_spread"]),
             ("alpha_imbalance", cfg.alpha_imbalance,   d["spread"]["alpha_imbalance"]),
             ("k",               cfg.k,                 d["k"]["k"]),

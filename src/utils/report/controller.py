@@ -880,6 +880,130 @@ class Controller:
                 print(f"  {lvl:<10}  {cnt:>12,.0f}  {rel:>14.3f}")
         print("═" * w)
 
+        if self._hft_enabled and self.hft_agent is not None:
+            self._report_hft()
+
+    # ── HFT report ────────────────────────────────────────────────────────────
+
+    def _report_hft(self) -> None:
+        """Print HFT activity summary and render fill-share + state-timeline plots."""
+        log    = self.step_log
+        trades = self.trade_history
+
+        mm_fills  = len(trades[~trades['is_hedge']]) if not trades.empty else 0
+        hft_fills = int(log['hft_fills_this_step'].sum())
+        total     = mm_fills + hft_fills
+
+        hft_fh = self.hft_agent._fill_history
+        hft_avg_size = float(np.mean([r['size'] for r in hft_fh])) if hft_fh else 0.0
+
+        state_names = {0: 'ACTIVE', 1: 'ONE_SIDED_BID', 2: 'ONE_SIDED_ASK', 3: 'OFFLINE'}
+        n_total = len(log)
+        cfg = self.hft_agent.cfg
+
+        w = 68
+        print("═" * w)
+        print("  HFT AGENT — ACTIVITY SUMMARY")
+        print("═" * w)
+        mm_share  = mm_fills  / total if total > 0 else float('nan')
+        hft_share = hft_fills / total if total > 0 else float('nan')
+        print(f"  {'MM fills':<34}  {mm_fills:>8,}  ({mm_share:>6.1%} of total)")
+        print(f"  {'HFT fills':<34}  {hft_fills:>8,}  ({hft_share:>6.1%} of total)")
+        print(f"  {'HFT avg fill size (EUR)':<34}  {hft_avg_size:>14,.0f}")
+        print("─" * w)
+        print(f"  {'HFT config':<34}  spread_fraction={cfg.spread_fraction}  "
+              f"depth={cfg.max_depth_eur:,.0f} EUR")
+        print(f"  {'  vol_offline_threshold':<34}  {cfg.vol_offline_threshold:.2f}  "
+              f"(annualised)")
+        print(f"  {'  trend_threshold_bps':<34}  {cfg.trend_threshold_bps:.2f} bps  "
+              f"window={cfg.trend_window_s:.1f}s")
+        print("─" * w)
+        print(f"  {'HFT state breakdown':}")
+        for sv, sn in state_names.items():
+            mask         = log['hft_state'] == sv
+            n_st         = int(mask.sum())
+            pct          = n_st / n_total * 100 if n_total > 0 else 0.0
+            fills_in_st  = int(log.loc[mask, 'hft_fills_this_step'].sum())
+            print(f"  {sn:<20}  {pct:>5.1f}% of steps   HFT fills={fills_in_st:>6,}")
+        print("═" * w)
+
+        # ── Plot 1: fill-share bar (MM vs HFT) ───────────────────────────────
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig.patch.set_facecolor('#111111')
+        for ax in axes:
+            ax.set_facecolor('#111111')
+            ax.tick_params(colors='white')
+            ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.5, color='#444444')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#444444')
+            ax.spines['bottom'].set_color('#444444')
+
+        axes[0].bar(['MM', 'HFT'], [mm_fills, hft_fills],
+                    color=['#4499ff', '#ff4444'], alpha=0.85, edgecolor='#111111')
+        axes[0].set_title('Fill count — MM vs HFT', color='white', fontsize=12)
+        axes[0].set_ylabel('Number of fills', color='white')
+        for i, v in enumerate([mm_fills, hft_fills]):
+            axes[0].text(i, v + max(mm_fills, hft_fills) * 0.01, f'{v:,}',
+                         ha='center', color='white', fontsize=9)
+
+        axes[1].bar(['MM', 'HFT'], [mm_share, hft_share],
+                    color=['#4499ff', '#ff4444'], alpha=0.85, edgecolor='#111111')
+        axes[1].set_ylim(0, 1)
+        axes[1].set_title('Fill share — MM vs HFT', color='white', fontsize=12)
+        axes[1].set_ylabel('Fraction of total fills', color='white')
+        for i, v in enumerate([mm_share, hft_share]):
+            if not np.isnan(v):
+                axes[1].text(i, v + 0.01, f'{v:.1%}', ha='center', color='white', fontsize=9)
+
+        n_days_val = round(log['t'].iloc[-1] / 86400, 1) if len(log) > 1 else '?'
+        plt.suptitle(f'HFT vs MM fill share  ({n_days_val} days)',
+                     color='white', fontsize=13)
+        plt.tight_layout()
+        plt.show()
+
+        # ── Plot 2: HFT state timeline + price overlay ────────────────────────
+        s = self._ds(log)
+        t_axis = s['t'] / (86_400.0 if float(log['t'].iloc[-1]) > 86_400 else 3_600.0)
+        x_label = 'Time (days)' if float(log['t'].iloc[-1]) > 86_400 else 'Time (hours)'
+
+        state_colors = {0: '#00ff88', 1: '#ffcc00', 2: '#ff9500', 3: '#ff4444'}
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 7), sharex=True)
+        fig.patch.set_facecolor('#111111')
+        for ax in (ax1, ax2):
+            ax.set_facecolor('#111111')
+            ax.tick_params(colors='white')
+            ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.4, color='#444444')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#444444')
+            ax.spines['bottom'].set_color('#444444')
+
+        ax1.plot(t_axis, s['fair_mid'], color='#ffcc00', linewidth=0.7, label='Fair mid')
+        ax1.set_ylabel('EUR/USD', color='#ffcc00')
+        ax1.tick_params(axis='y', colors='#ffcc00')
+        ax1.set_title('EUR/USD fair mid with HFT state overlay', color='white', fontsize=12)
+        ylim = ax1.get_ylim()
+        for sv, sc in state_colors.items():
+            mask = s['hft_state'].values == sv
+            if mask.any():
+                ax1.fill_between(t_axis.values, ylim[0], ylim[1],
+                                 where=mask, alpha=0.09, color=sc,
+                                 label=state_names[sv])
+        ax1.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8)
+
+        ax2.plot(t_axis, s['hft_state'], color='#4499ff', linewidth=0.6,
+                 drawstyle='steps-post')
+        ax2.set_yticks([0, 1, 2, 3])
+        ax2.set_yticklabels(['ACTIVE', 'ONE_SIDED_BID', 'ONE_SIDED_ASK', 'OFFLINE'],
+                             color='white', fontsize=8)
+        ax2.set_ylabel('HFT state', color='white')
+        ax2.set_xlabel(x_label, color='white')
+        ax2.set_title('HFT state timeline', color='white', fontsize=12)
+        plt.tight_layout()
+        plt.show()
+
     # ── Phase 3 ───────────────────────────────────────────────────────────────
 
     def _reset_hft(self, cfg: HFTConfig, schedule=None) -> None:
