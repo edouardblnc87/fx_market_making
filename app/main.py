@@ -56,6 +56,7 @@ def main() -> int:
         app.setStyleSheet(qss_path.read_text())
 
     win = MainWindow()
-    win.resize(700, 520)
+    win.resize(860, 600)
+    win.setMinimumSize(720, 520)
     win.show()
     return app.exec()

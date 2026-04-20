@@ -91,6 +91,7 @@ class MainWindow(QMainWindow):
         r1.addWidget(QLabel("Model:"))
         self._model = QComboBox()
         self._model.addItems(["GARCH", "GBM", "Heston"])
+        self._model.setMinimumWidth(110)
         self._model.currentTextChanged.connect(self._on_model_change)
         r1.addWidget(self._model)
         r1.addSpacing(12)
@@ -161,13 +162,13 @@ class MainWindow(QMainWindow):
 
         # Capital
         r3 = QHBoxLayout()
-        r3.addWidget(QLabel("Capital (€):"))
+        r3.addWidget(QLabel("Capital K (EUR/USD):"))
         self._capital = QDoubleSpinBox()
         self._capital.setRange(10_000, 100_000_000)
         self._capital.setDecimals(0)
         self._capital.setSingleStep(100_000)
         self._capital.setValue(1_000_000)
-        self._capital.setMinimumWidth(120)
+        self._capital.setMinimumWidth(130)
         r3.addWidget(self._capital)
         r3.addStretch()
         lay.addLayout(r3)
@@ -202,9 +203,6 @@ class MainWindow(QMainWindow):
         self._btn_p1.setObjectName("btn_phase1")
         self._btn_p1.clicked.connect(self._run_phase1)
         r1.addWidget(self._btn_p1)
-        r1.addWidget(QLabel("Client seed:"))
-        self._client_seed = _ispin(99, 0, 99999)
-        r1.addWidget(self._client_seed)
         self._lbl_p1 = QLabel("")
         self._lbl_p1.setObjectName("lbl_status_p1")
         r1.addSpacing(12)
@@ -244,7 +242,7 @@ class MainWindow(QMainWindow):
         self._btn_p3.setObjectName("btn_phase3")
         self._btn_p3.clicked.connect(self._run_phase3)
         r4.addWidget(self._btn_p3)
-        r4.addWidget(QLabel("HFT depth (€):"))
+        r4.addWidget(QLabel("Quote size / side (EUR):"))
         self._hft_depth = _spin(2000.0, 100.0, 1_000_000.0, 0, 500.0)
         r4.addWidget(self._hft_depth)
         self._lbl_p3 = QLabel("")
@@ -363,7 +361,7 @@ class MainWindow(QMainWindow):
             self.market_B, self.market_C,
             n_steps=n_steps,
             capital=self._capital.value(),
-            client_seed=self._client_seed.value(),
+            client_seed=self._seed.value(),
             parent=self,
         )
         w.finished.connect(self._on_p1_done)
@@ -418,7 +416,7 @@ class MainWindow(QMainWindow):
             self.market_B, self.market_C, cfg,
             n_steps=n_steps,
             capital=self._capital.value(),
-            client_seed=self._client_seed.value(),
+            client_seed=self._seed.value(),
             parent=self,
         )
         w.finished.connect(self._on_p2_done)
@@ -444,7 +442,7 @@ class MainWindow(QMainWindow):
             self.market_B, self.market_C, cfg,
             n_steps=n_steps,
             capital=self._capital.value(),
-            client_seed=self._client_seed.value(),
+            client_seed=self._seed.value(),
             n_days=n_days,
             hft_depth=self._hft_depth.value(),
             parent=self,
