@@ -23,7 +23,6 @@ from .volatility_calibrator import VolatilityCalibrator
 from .spread_calibrator import SpreadCalibrator
 from .gamma_optimizer import GammaOptimizer
 from .k_calibrator import KCalibrator
-from .ladder_calibrator import LadderCalibrator
 from .stale_calibrator import StaleCalibrator
 
 
@@ -54,7 +53,7 @@ class CalibratedConfigBuilder:
       - alpha_spread       — inventory spread weight  (SpreadCalibrator)
       - alpha_imbalance    — OFI tilt                 (SpreadCalibrator)
       - k                  — arrival intensity decay  (KCalibrator)
-      - beta, Q_base       — ladder shape             (LadderCalibrator)
+      - beta, Q_base       — ladder shape             (from target_sweep design input)
       - stale_s            — staleness threshold      (StaleCalibrator)
 
     What is NOT calibrated (exogenous market):
@@ -70,8 +69,20 @@ class CalibratedConfigBuilder:
     # Public API
     # ------------------------------------------------------------------
 
-    def build(self) -> QuoterConfig:
-        """Run calibration pipeline. Return a calibrated QuoterConfig."""
+    def build(self, target_sweep: float = 0.05, beta: float = 1.0) -> QuoterConfig:
+        """
+        Run calibration pipeline. Return a calibrated QuoterConfig.
+
+        Parameters
+        ----------
+        target_sweep : fraction of client orders that should sweep past level 1
+                       and reach level 2.  Controls Q_base via the Pareto CDF:
+                       Q_base = x_min × target_sweep^(-1/alpha).
+                       Default 0.05 → ~5% sweep-through → Q_base ≈ 7 370 EUR.
+        beta         : ladder size decay per level.  Manual input — not calibrated
+                       from data (fill-volume data cannot reliably recover beta).
+                       Default 1.0 → level 2 ≈ 37% of level 1.
+        """
         ctrl = self._ctrl
         trade_history = ctrl.trade_history
         step_log = ctrl.step_log
@@ -84,21 +95,29 @@ class CalibratedConfigBuilder:
         vol_cal    = VolatilityCalibrator(mid_prices, dt)
         spread_cal = SpreadCalibrator(trade_history, step_log, capital_K)
         k_cal      = KCalibrator(trade_history)
-        ladder_cal = LadderCalibrator(trade_history)
         stale_cal  = StaleCalibrator(trade_history, step_log)
 
         # Round 1: all fill-based + vol calibrators are mutually independent.
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_vol    = pool.submit(vol_cal.fit_ewma)
             f_spread = pool.submit(spread_cal.fit)
             f_k      = pool.submit(k_cal.fit)
-            f_ladder = pool.submit(ladder_cal.fit)
             f_stale  = pool.submit(stale_cal.fit)
             vol_params    = f_vol.result()
             spread_params = f_spread.result()
             k_params      = f_k.result()
-            ladder_params = f_ladder.result()
             stale_params  = f_stale.result()
+
+        # Q_base from target sweep rate — Pareto CDF inversion.
+        # P(X > Q_base) = target_sweep  →  Q_base = x_min × target_sweep^(-1/alpha)
+        alpha_pareto = _SIZE_DEFAULTS["alpha"]    # 1.5
+        x_min        = _SIZE_DEFAULTS["size_min"] # 1 000 EUR
+        Q_base       = x_min * target_sweep ** (-1.0 / alpha_pareto)
+        ladder_params = {
+            "Q_base":        Q_base,
+            "beta":          beta,
+            "target_sweep":  target_sweep,
+        }
 
         # Round 2: gamma optimisation + vol comparison both need vol_params.
         gamma_opt = GammaOptimizer(
@@ -132,8 +151,8 @@ class CalibratedConfigBuilder:
             alpha_spread=spread_params["alpha_spread"],
             alpha_imbalance=spread_params["alpha_imbalance"],
             k=k_params["k"],
-            beta=ladder_params["beta"],
-            Q_base=ladder_params["Q_base"],
+            beta=beta,
+            Q_base=Q_base,
             stale_s=stale_params["stale_s"],
         )
 
@@ -146,7 +165,9 @@ class CalibratedConfigBuilder:
         if not self.diagnostics:
             return "No calibration run yet — call build() first."
 
-        d = self.diagnostics
+        d   = self.diagnostics
+        cfg = QuoterConfig()   # default instance — single source of truth
+
         lines = [
             "=" * 68,
             "  CALIBRATION SUMMARY — Phase 1 → Phase 2  (QuoterConfig only)",
@@ -157,21 +178,27 @@ class CalibratedConfigBuilder:
         ]
 
         rows = [
-            ("gamma",           "0.1",       d["gamma"]["gamma"]),
-            ("omega",           f"{1/(8*3600):.2e}", d["gamma"]["omega"]),
-            ("vol_window_s",    "60.0",      d["volatility_ewma"]["vol_window"] * self._dt),
-            ("alpha_spread",    "0.5",       d["spread"]["alpha_spread"]),
-            ("alpha_imbalance", "0.0002",    d["spread"]["alpha_imbalance"]),
-            ("k",               "0.3",       d["k"]["k"]),
-            ("k_buy",           "0.3",       d["k"]["k_buy"]),
-            ("k_sell",          "0.3",       d["k"]["k_sell"]),
-            ("beta",            "0.3",       d["ladder"]["beta"]),
-            ("Q_base",          "100000",    d["ladder"]["Q_base"]),
-            ("stale_s",         "3.0",       d["stale"]["stale_s"]),
+            ("gamma",           cfg.gamma,            d["gamma"]["gamma"]),
+            ("omega",           cfg.omega,             d["gamma"]["omega"]),
+            ("vol_window_s",    cfg.vol_window_s,      d["volatility_ewma"]["vol_window"] * self._dt),
+            ("alpha_spread",    cfg.alpha_spread,      d["spread"]["alpha_spread"]),
+            ("alpha_imbalance", cfg.alpha_imbalance,   d["spread"]["alpha_imbalance"]),
+            ("k",               cfg.k,                 d["k"]["k"]),
+            ("k_buy",           0.3,                   d["k"]["k_buy"]),
+            ("k_sell",          0.3,                   d["k"]["k_sell"]),
+            ("beta",            cfg.beta,              d["ladder"]["beta"]),
+            ("Q_base",          cfg.Q_base,            d["ladder"]["Q_base"]),
+            ("stale_s",         cfg.stale_s,           d["stale"]["stale_s"]),
+            ("target_sweep",    "n/a",       d["ladder"]["target_sweep"]),
         ]
 
         for name, default, calibrated in rows:
-            lines.append(f"  {name:<25} {default:>12} {calibrated:>12.6g}")
+            try:
+                lines.append(f"  {name:<25} {default:>12.6g} {calibrated:>12.6g}")
+            except:
+                lines.append(f"  {name:<25} {default:>12} {calibrated:>12}")
+
+
 
         lines.append("")
         lines.append(f"  Expected daily Sharpe: {d['gamma']['expected_sharpe']:.3f}")

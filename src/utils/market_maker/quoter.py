@@ -40,14 +40,14 @@ class QuoterConfig:
     # Quoting structure
     n_levels: int = 10
     beta: float = 0.3
-    Q_base: float = 100_000.0
+    Q_base: float = 70000.0
 
     # Market conventions
     tick_size: float = 0.0001
 
     # Requote triggers
     requote_threshold_spread_fraction: float = 0.25
-    stale_s: float = 3.0            # seconds before Priority 6 fires (was stale_steps)
+    stale_s: float = 40.0            # seconds before Priority 6 fires (was stale_steps)
     stale_tight_fraction: float = 0.7  # reprice stale orders at 70% of normal half_spread
     # Inventory-change trigger: force a requote when |inventory| has moved by more than this fraction of capital_K since the last reprice, even if prices are flat.
     inventory_requote_fraction: float = 0.05
@@ -201,6 +201,72 @@ class Quoter:
         # every step (it was already read as p1 at the previous step).
         self._ewma_prev_price: float | None = None
 
+        # ── Hot-path array caches ─────────────────────────────────────────────
+        # Caching direct references to the price arrays avoids re-traversing the
+        # market_B.bid_price attribute chain (2 __getattribute__ calls) on every
+        # step.  Requires markets to be fully initialised before Quoter.__init__.
+        self._bid_B_arr = market_B.bid_price
+        self._ask_B_arr = market_B.ask_price
+        self._bid_C_arr = market_C.bid_price
+        self._ask_C_arr = market_C.ask_price
+        self._mid_B_arr = market_B.noised_mid_price
+
+        # Last step on which a full reprice (P2/P3/P5/P6) was executed.
+        # Used to short-circuit the Priority-6 stale scan: if the most recent
+        # full reprice was less than stale_steps ago, no order can be stale yet.
+        self._last_full_reprice_step: int = 0
+
+        # ── Pre-computed per-step lookup arrays ────────────────────────────────
+        # One-time O(N) vectorised passes so the hot loop avoids per-step Python
+        # arithmetic for EWMA vol, session-k, and session-reset detection.
+        _prices = market_B.noised_mid_price
+        _n      = len(_prices)
+        _t_arr  = np.arange(_n, dtype=np.float64) * self._dt
+        _t_mod  = _t_arr % (24.0 * 3600.0)
+
+        # 1. Session-adaptive k for every step (replaces _session_k(t) per step)
+        _k = self.cfg.k
+        self._precomp_k: np.ndarray = np.select(
+            [_t_mod < 8.0 * 3600.0, _t_mod < 16.0 * 3600.0],
+            [_k * _SESSION_K_MULTIPLIERS["tokyo"],
+             _k * _SESSION_K_MULTIPLIERS["london"]],
+            default=_k * _SESSION_K_MULTIPLIERS["newyork"],
+        ).astype(np.float64)
+
+        # 2. Session reset step set (replaces _is_session_reset(t) per step)
+        _reset_mask = np.zeros(_n, dtype=bool)
+        if _n > 1:
+            for _b in FX_SESSION_RESETS_UTC:
+                _reset_mask[1:] |= (_t_mod[1:] >= _b) & (_t_mod[:-1] < _b)
+        self._session_reset_set: frozenset = frozenset(
+            int(i) for i in np.where(_reset_mask)[0]
+        )
+
+        # 3. EWMA annualised vol path (replaces _update_ewma_vol + _estimate_vol)
+        # pandas ewm(adjust=False):  y[0]=x[0],  y[n]=α·x[n]+(1-α)·y[n-1]
+        # matches the previous incremental update exactly.
+        import pandas as _pd
+        if _n > 1:
+            _lr  = np.log(np.maximum(_prices[1:], 1e-12)
+                          / np.maximum(_prices[:-1], 1e-12))
+            _r2  = _lr ** 2
+            _a   = 2.0 / (self._vol_window_steps + 1)
+            _ewm = _pd.Series(_r2).ewm(alpha=_a, adjust=False).mean().values
+            _vol = np.sqrt(np.maximum(_ewm, 1e-12) / self._dt_frac)
+            self._precomp_vol = np.empty(_n, dtype=np.float64)
+            self._precomp_vol[0] = market_B.stock.vol
+            self._precomp_vol[1:] = _vol
+        else:
+            self._precomp_vol = np.full(max(_n, 1), market_B.stock.vol,
+                                        dtype=np.float64)
+        # Warmup: use parametric vol for the first vol_min_steps (same as before)
+        self._precomp_vol[:min(self._vol_min_steps + 1, _n)] = market_B.stock.vol
+
+        # Cached Market-A best bid/ask: written by compute_quotes on every active
+        # reprice so the controller can skip the O(n_resting) scan each step.
+        self._last_best_bid_A: float = -1e18
+        self._last_best_ask_A: float =  1e18
+
 
     #  LISTENER INTERFACE  (called by the OrderBook)
 
@@ -290,9 +356,6 @@ class Quoter:
         7. Nothing triggered -> return [], [] (no action).
         """
 
-        # Step 0: update incremental EWMA vol estimate for this step
-        self._update_ewma_vol(step)
-
         # Step 1: drain both fill queues (accumulated since last call via on_fill)
         filled_slots = {(f.direction, f.level) for f in self._pending_fills}
         self._pending_fills.clear()
@@ -300,9 +363,15 @@ class Quoter:
         topup_ids = {e.order_id for e in self._pending_topups}
         self._pending_topups.clear()
 
-        # Step 2: compute current theoretical best bid and ask
-        bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
-        bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
+        # Step 2: compute current theoretical best bid and ask.
+        # Inline the array lookups using cached references — avoids two
+        # function-call overheads and attribute-chain traversals per step.
+        stale_B = max(0, step - self._lag_B)
+        bid_B = float(self._bid_B_arr[stale_B])
+        ask_B = float(self._ask_B_arr[stale_B])
+        stale_C = max(0, step - self._lag_C)
+        bid_C = float(self._bid_C_arr[stale_C])
+        ask_C = float(self._ask_C_arr[stale_C])
         # Cache stale quotes so execute_hedge can reuse them without a second lookup.
         self._cache_bid_B = bid_B
         self._cache_ask_B = ask_B
@@ -310,15 +379,15 @@ class Quoter:
         self._cache_ask_C = ask_C
         fair_mid = (max(bid_B, bid_C) + min(ask_B, ask_C)) / 2.0
 
-        sigma = self._estimate_vol(step)
+        # Pre-computed arrays: O(1) array lookup instead of per-step computation.
+        sigma = float(self._precomp_vol[min(step, len(self._precomp_vol) - 1)])
         self._cache_sigma = sigma   # reused by execute_hedge
 
         inv_horizon_y = self._inv_horizon_y
         if self._hedge_emergency:
             inv_horizon_y *= self.cfg.emergency_penalty_multiplier
 
-        # Session-adaptive k
-        k_eff = self._session_k(t)
+        k_eff = float(self._precomp_k[min(step, len(self._precomp_k) - 1)])
 
         # ── Spread first (needed to scale the reservation price shift) ──────────
         # A-S optimal spread under infinite horizon
@@ -373,10 +442,13 @@ class Quoter:
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
             self._last_requote_rule = 1
+            self._last_full_reprice_step = step
+            self._last_best_bid_A = best_bid
+            self._last_best_ask_A = best_ask
             return self._build_ladder(best_bid, best_ask, inventory_ratio), []
 
         # Priority 2: FX session boundary — cancel everything, start fresh
-        if self._is_session_reset(t):
+        if step in self._session_reset_set:
             self._last_session_reset_t = t
             self._prev_best_bid = best_bid
             self._prev_best_ask = best_ask
@@ -384,6 +456,9 @@ class Quoter:
             self._flow_history.clear()
             cancel_ids = list(resting_orders.keys())
             self._last_requote_rule = 2
+            self._last_full_reprice_step = step
+            self._last_best_bid_A = best_bid
+            self._last_best_ask_A = best_ask
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
         # Priority 3: best price has drifted beyond threshold — cancel all and reprice
@@ -397,6 +472,9 @@ class Quoter:
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
             self._last_requote_rule = 3
+            self._last_full_reprice_step = step
+            self._last_best_bid_A = best_bid
+            self._last_best_ask_A = best_ask
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
         # Priority 4: full fills + partial top-ups. Handle both in one pass
@@ -406,6 +484,8 @@ class Quoter:
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
             self._last_requote_rule = 4
+            self._last_best_bid_A = best_bid
+            self._last_best_ask_A = best_ask
             return self._build_partial_ladder(best_bid, best_ask, inventory_ratio, filled_slots) + topup_orders, []
 
         # Priority 5: inventory has drifted enough since the last reprice to invalidate the current skew, even if market prices have not moved (silent accumulation).
@@ -416,9 +496,20 @@ class Quoter:
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
             self._last_requote_rule = 5
+            self._last_full_reprice_step = step
+            self._last_best_bid_A = best_bid
+            self._last_best_ask_A = best_ask
             return self._build_ladder(best_bid, best_ask, inventory_ratio), cancel_ids
 
-        # Priority 6: stale orders — reprice aggressively regardless of inventory
+        # Priority 6: stale orders — reprice aggressively regardless of inventory.
+        # Early-exit: if the last full reprice (P2/P3/P5) was within stale_steps
+        # steps ago, ALL resting orders are younger than the staleness threshold —
+        # no need to scan.  P3 fires every ~23 steps while stale_steps ≈ 400, so
+        # this short-circuit eliminates the O(n_resting) scan on almost every step.
+        if (step - self._last_full_reprice_step) <= self._stale_steps:
+            self._last_requote_rule = 0
+            return [], []
+
         stale_slots: Set[Tuple[str, int]] = set()
         cancel_ids_6: List[str] = []
         for oid, info in resting_orders.items():
@@ -430,6 +521,9 @@ class Quoter:
             self._prev_best_ask = best_ask
             self._prev_inventory = self.inventory
             self._last_requote_rule = 6
+            self._last_full_reprice_step = step
+            self._last_best_bid_A = best_bid
+            self._last_best_ask_A = best_ask
             return self._build_ladder_tight(best_bid, best_ask, inventory_ratio,
                                             self.cfg.stale_tight_fraction), cancel_ids_6
 
@@ -794,36 +888,12 @@ class Quoter:
             return self.cfg.k * _SESSION_K_MULTIPLIERS["newyork"]
 
     def _update_ewma_vol(self, step: int) -> None:
-        """
-        Incremental EWMA variance update — O(1) per step.
-        Call exactly once per step, before _estimate_vol().
-        Uses a single log-return from the previous step to current step.
-        _ewma_prev_price caches the last p1 so we avoid reading index step-1 twice.
-        """
-        p1 = float(self.market_B.noised_mid_price[step])
-        if self._ewma_prev_price is None:
-            self._ewma_prev_price = p1
-            return
-        p0 = self._ewma_prev_price
-        self._ewma_prev_price = p1
-        if p0 <= 0.0:
-            return
-        r = np.log(p1 / p0)
-        alpha = 2.0 / (self._vol_window_steps + 1)
-        if self._ewma_var is None:
-            self._ewma_var = r * r
-        else:
-            self._ewma_var = alpha * r * r + (1.0 - alpha) * self._ewma_var
+        """No-op: EWMA vol pre-computed in __init__ as self._precomp_vol."""
+        pass
 
     def _estimate_vol(self, step: int) -> float:
-        """
-        Return the current annualised volatility estimate.
-        Uses the incremental EWMA maintained by _update_ewma_vol().
-        Falls back to the parametric vol below vol_min_steps.
-        """
-        if step < self._vol_min_steps or self._ewma_var is None:
-            return self.market_B.stock.vol
-        return max(np.sqrt(self._ewma_var / self._dt_frac), 1e-6)
+        """Return annualised vol at step — O(1) lookup into pre-computed array."""
+        return float(self._precomp_vol[min(step, len(self._precomp_vol) - 1)])
 
     def _get_stale_quotes(self, market: Market, step: int, lag: int) -> Tuple[float, float]:
         stale_step = max(0, step - lag)

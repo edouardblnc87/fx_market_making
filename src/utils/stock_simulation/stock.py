@@ -89,19 +89,23 @@ class Stock(object):
         self.simulation =  path
         self.sim_type   = 'gbm'
     
-    #return the series of annualized realized vol over a window n
     def compute_realized_volatility(self, window_size):
+        """Return annualized rolling realized vol (zero-mean estimator, O(N))."""
         if self.simulation is None:
             print("No path generated yet — run simulate_gbm first.")
             return
-        else:
-            coeff_annualization = np.sqrt(TRADING_SECONDS_PER_DAY * 252/self.time_step)
-            print(f"Coefficient annualization : {coeff_annualization}")
-            log_returns = np.diff(np.log(self.simulation))
-            vol = np.zeros(len(self.simulation))
-            for t in range(window_size, len(self.simulation)):                                                                                                                                                                       
-                vol[t] = np.std(log_returns[t - window_size : t])                                                                                                                                                              
-            return vol * coeff_annualization
+        coeff_annualization = np.sqrt(TRADING_SECONDS_PER_DAY * 252 / self.time_step)
+        log_returns = np.diff(np.log(self.simulation))
+        vol = np.zeros(len(self.simulation))
+        # Vectorized rolling sum of r² via cumsum — O(N) regardless of window_size
+        r2    = log_returns ** 2
+        cumr2 = np.empty(len(r2) + 1)
+        cumr2[0] = 0.0
+        np.cumsum(r2, out=cumr2[1:])
+        vol[:window_size] = np.sqrt(cumr2[window_size] / window_size)
+        rvar = (cumr2[window_size:] - cumr2[:-window_size]) / window_size
+        vol[window_size:] = np.sqrt(rvar)
+        return vol * coeff_annualization
              
 
 

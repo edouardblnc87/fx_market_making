@@ -8,21 +8,27 @@ from ..client_flow.flow_generator import ClientFlowGenerator
 from .controller import Controller
 
 def _build_market_B(stock, seed=42):
+    dt = stock.time_step
     np.random.seed(seed)
     m = Market(stock=stock)
     m.generate_noised_mid_price()
-    m.build_spread(option='Skew', window_size=600, alpha=0.5,
-                   gamma=0.3, ema_span=500, threshold=3,
-                   spread_bps=0.5)   # ~1.5 bps total at nominal vol (ECN-grade, was 3 bps)
+    # window_size at regime scale (120 s) — rolling RV is already smooth at
+    # that scale, so no EMA smoothing is needed inside build_skewed_spread.
+    # ema_span in wall-clock seconds → steps for the momentum signal.
+    ema_span_steps = max(1, int(10 / dt))
+    m.build_spread(option='Skew', window_size=max(1, int(60 / dt)), alpha=1.5,
+                   gamma=0.3, ema_span=ema_span_steps, threshold=1.5,
+                   spread_bps=0.5)   # 2×0.5×(1+1.5) = 2.5 bps at nominal vol, up to 5 bps at 5× vol
     m.generate_depth(mean_eur=500_000)
     return m
 
 def _build_market_C(stock, seed=43):
+    dt = stock.time_step
     np.random.seed(seed)
     m = Market(stock=stock)
     m.generate_noised_mid_price()
-    m.build_spread(option='Adaptive', window_size=600, alpha=0.5,
-                   spread_bps=0.7)   # ~1.4 bps total at nominal vol (slightly wider than B, less depth)
+    m.build_spread(option='Adaptive', window_size=max(1, int(60 / dt)), alpha=0.8,
+                   spread_bps=0.7)   # ~1.4 bps total at nominal vol (slightly wider than B)
     m.generate_depth(mean_eur=200_000)
     return m
 
