@@ -74,6 +74,7 @@ class Order_book:
         self._mm_resting: dict = {}
 
         self._fill_callback = None
+        self._hft_fill_callback = None
         self._current_step: int = 0
 
     # ── Backward-compatible DataFrame views (display / analysis only) ─────────
@@ -126,6 +127,9 @@ class Order_book:
     def register_quoter_listener(self, callback) -> None:
         self._fill_callback = callback
 
+    def register_hft_listener(self, callback) -> None:
+        self._hft_fill_callback = callback
+
     def tick(self, step: int) -> None:
         self._current_step = step
         # Age is computed on demand: step - entry["post_step"] (no loop needed)
@@ -166,6 +170,11 @@ class Order_book:
                 "original_size":  order._size,
                 "remaining_size": order._size,
             }
+            self._mm_dirty = True
+        elif order._origin == "hft":
+            # HFT orders participate in matching (price-time priority with MM orders)
+            # but are NOT tracked in _mm_resting (no age, no reprice logic)
+            self._orders[order._id] = entry
             self._mm_dirty = True
         else:
             self._client_orders[order._id] = entry
@@ -257,9 +266,9 @@ class Order_book:
                 if orders[ma_id]["size"] == 0:
                     del orders[ma_id]
                     self._mm_resting.pop(ma_id, None)
-                    self._fire_fill(ma_id, "sell", ma["price"], matched, ma["level"], True)
+                    self._fire_fill(ma_id, "sell", ma["price"], matched, ma["level"], True, ma["origin"])
                 elif matched > 0:
-                    self._fire_fill(ma_id, "sell", ma["price"], matched, ma["level"], False)
+                    self._fire_fill(ma_id, "sell", ma["price"], matched, ma["level"], False, ma["origin"])
 
                 if cb_id in client_orders and client_orders[cb_id]["size"] == 0:
                     del client_orders[cb_id]
@@ -299,19 +308,19 @@ class Order_book:
                 if orders[mb_id]["size"] == 0:
                     del orders[mb_id]
                     self._mm_resting.pop(mb_id, None)
-                    self._fire_fill(mb_id, "buy", mb["price"], matched, mb["level"], True)
+                    self._fire_fill(mb_id, "buy", mb["price"], matched, mb["level"], True, mb["origin"])
                 elif matched > 0:
-                    self._fire_fill(mb_id, "buy", mb["price"], matched, mb["level"], False)
+                    self._fire_fill(mb_id, "buy", mb["price"], matched, mb["level"], False, mb["origin"])
 
                 if cs_id in client_orders and client_orders[cs_id]["size"] == 0:
                     del client_orders[cs_id]
 
-    def _fire_fill(self, order_id, direction, price, size, level, is_full_fill) -> None:
+    def _fire_fill(self, order_id, direction, price, size, level, is_full_fill,
+                   origin: str = "market_maker") -> None:
         if not is_full_fill and order_id in self._mm_resting:
             self._mm_resting[order_id]["remaining_size"] -= size
-        if self._fill_callback is None:
-            return
-        self._fill_callback(FillEvent(
+
+        event = FillEvent(
             order_id=order_id,
             direction=direction,
             price=price,
@@ -319,7 +328,14 @@ class Order_book:
             step=self._current_step,
             level=level,
             is_full_fill=is_full_fill,
-        ))
+        )
+
+        if origin == "hft":
+            if self._hft_fill_callback is not None:
+                self._hft_fill_callback(event)
+        else:
+            if self._fill_callback is not None:
+                self._fill_callback(event)
 
     # ── Display helpers ───────────────────────────────────────────────────────
 
