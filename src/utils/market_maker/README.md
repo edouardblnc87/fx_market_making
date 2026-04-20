@@ -9,9 +9,9 @@ Exchange A is a new venue that has approached our firm to act as Designated Mark
 
 HFTs access both feeds in 50ms, giving them a 150ms/120ms edge over us.
 
-Starting capital K is half in EUR, half in USD (flat inventory = 0 at session start). Delta risk limit is 90%: when `|inventory| / K > 90%` we hedge back to flat (inventory = 0) via taker market orders on B and/or C.
+Starting capital K is half in EUR, half in USD (flat inventory = 0 at session start). Capital is thus split 50/50 between EUR and USD at inception, so risk limits are expressed against `K / 2` (each currency leg). Delta risk limit fires when `|inventory| > delta_limit × (K/2)` **or** `|inventory × fair_mid| > delta_limit × (K/2)` — both EUR and USD notional are checked. We then hedge via taker market orders on B and/or C.
 
-EUR/USD trades 24 hours a day. The quoter organises the day into three FX sessions with hard resets at **08:00 and 16:00 UTC** (London, New York). Each session uses an independent horizon `T = 8h` for the Avellaneda-Stoikov urgency model.
+EUR/USD trades 24 hours a day. The quoter organises the day into three FX sessions with hard resets at **08:00 and 16:00 UTC** (London, New York). The A-S inventory penalty uses an infinite-horizon stationary discount `ω = 1/(8h)` — the effective risk horizon — rather than a finite `T − t` countdown, because a 24/5 FX market has no terminal liquidation date.
 
 ---
 
@@ -50,16 +50,16 @@ B and C each support 5 spread types: Static, Stochastic, Adaptive, Asymmetric, S
 
 ### Step 2 — Adaptive volatility (EWMA)
 
-Before `vol_window` steps have elapsed the quoter falls back to the parametric `stock.vol`. Afterwards it uses EWMA realized vol with a safety floor at 20% of parametric vol.
+Before `vol_min_s` seconds of data have accumulated, the quoter falls back to the parametric `stock.vol`. Afterwards it uses EWMA realized vol over a `vol_window_s` rolling window. The full per-step EWMA path is pre-computed once at `Quoter.__init__` for O(1) per-step lookup.
 
-### Step 3 — Reservation price (Avellaneda-Stoikov + Guéant terminal penalty)
+### Step 3 — Reservation price (Avellaneda-Stoikov, infinite horizon)
 
 ```
-penalty_factor = 1 + strength × (t/T)³
-r(t) = fair_mid − q × γ × σ² × (T−t) × penalty_factor
+ρ = q / K
+r(t) = fair_mid − ρ × half_spread
 ```
 
-The cubic penalty ramps hard in the final ~20% of the session to ensure clean end-of-session inventory.
+The original A-S shift `q × γ × σ² × (T−t)` is rescaled to the inventory ratio × half-spread. Motivation: applying the raw formula with q in EUR (0–900k) produces a shift of several hundred bps at 10% inventory, three orders of magnitude larger than the half-spread itself. Rescaling pins the shift to the spread, so at `|ρ| = 1` the quoted centre is displaced by exactly one half-spread — direction preserved, magnitude calibrated, no new free parameter.
 
 ### Step 4 — Order flow imbalance tilt (Cartea & Jaimungal)
 
@@ -70,14 +70,18 @@ r(t) += alpha_imbalance × imbalance × fair_mid
 
 When clients predominantly buy from us (hit our ask), the reservation price shifts up. Resets at each FX session boundary.
 
-### Step 5 — Total spread (three components)
+### Step 5 — Total spread (three components + fee floor)
 
 ```
-spread_AS        = [γ × (σ×100)² × (T−t) + (2/γ) × ln(1 + γ/k)] / 10000 × fair_mid
+spread_AS        = [γ × (σ×100)² × (1/ω) + (2/γ) × ln(1 + γ/k)] / 10000 × fair_mid
 spread_latency   = 2 × (σ / sqrt(T_year)) × sqrt(effective_gap_s)
 spread_inventory = α_spread × (q/K)² × spread_AS
 total_spread     = spread_AS + spread_latency + spread_inventory
+fee_floor        = min_edge_multiple × fee_A_maker × fair_mid
+half_spread      = max(total_spread / 2, tick_size, fee_floor)
 ```
+
+The fee floor guarantees the inception half-spread covers the maker fee: no fill is ever gross-negative. It binds in calm regimes where the three adversarial premia would otherwise collapse below fees.
 
 ### Step 6 — Asymmetric half-spreads (Guéant)
 
@@ -100,17 +104,20 @@ ask_size_i = round(Q_base × exp(−β×i) × (1 + 0.5 × clip(q/K, −1, 1)))
 | Priority | Trigger | Action |
 |---|---|---|
 | 1 | First call ever | Full 20-order ladder, no cancels |
-| 2 | FX session boundary | Cancel all, full ladder |
-| 3 | Best price drifted > threshold | Cancel all, full ladder |
+| 2 | FX session boundary (08:00 / 16:00 UTC) | Cancel all, full ladder |
+| 3 | Theoretical best drifted > `requote_threshold_spread_fraction` × spread | Cancel all, full ladder |
 | 4 | Full fill + partial top-ups pending | Requote filled slots only + top-up orders |
-| 5 | Stale orders + stressed inventory | Cancel stale slots, reprice those only |
+| 5 | `|Δ inventory| / K > inventory_requote_fraction` since last reprice | Cancel all, full ladder |
+| 6 | Any order older than `stale_s` seconds | Cancel stale slots, reprice at `stale_tight_fraction × spread` |
 | — | Nothing triggered | No action |
 
-Partial fill top-up: the surviving partial order stays resting (no cancel). A complementary order is posted at the **same price** for `original_size − remaining_size`.
+Priorities 3 and 5 close two distinct leaks: P3 fires when *market prices* have moved, P5 fires when *our inventory* has moved while prices are flat (silent accumulation at a stale skew). P6 fires on pure staleness and uses a tighter spread so the refreshed quotes compete back into relevance.
+
+Partial fill top-up (P4): the surviving partial order stays resting (no cancel). A complementary order is posted at the **same price** for `original_size − remaining_size`.
 
 ### Step 9 — Dynamic hedge routing
 
-When `|q| / K > 90%`, target is flat (inventory = 0). Hedge is executed as taker market orders on B and C.
+When either `|q| > delta_limit × (K/2)` or `|q × fair_mid| > delta_limit × (K/2)` (i.e. the EUR leg *or* its USD notional breaches the delta limit on half-capital), the target is flat (inventory = 0). Hedge is executed as taker market orders on B and C. Fair mid for the USD valuation is the cross-venue B/C mid, not `mid_A` — A's mid is polluted by our own skewed quotes.
 
 **Depth**: read from `market_B.depth[step − lag_B]` and `market_C.depth[step − lag_C]` — the actual EUR size quoted at the best price on each venue at the lagged step, same latency as price feeds. If depth arrays were not generated, falls back to `capital_K × weight_venue`.
 
@@ -127,12 +134,12 @@ C's shorter latency (170ms vs 200ms) gives it a higher score when vol is elevate
 
 **Partial hedge and emergency fallback**:
 
-| Post-hedge `|q|/K` | Outcome |
+| Post-hedge `|q|` | Outcome |
 |---|---|
-| ≤ 80% (`hedge_partial_limit`) | Hedge succeeded (full or partial). Normal quoting resumes next step. |
-| > 80% | Available depth on B+C was insufficient. Sets `_hedge_emergency = True`. |
+| ≤ `hedge_partial_limit × (K/2)` | Hedge succeeded (full or partial). Normal quoting resumes next step. |
+| >  `hedge_partial_limit × (K/2)` | Available depth on B+C was insufficient. Sets `_hedge_emergency = True`. |
 
-When `_hedge_emergency` is active, `compute_quotes` multiplies the A-S penalty factor by `emergency_penalty_multiplier` (default 5×), forcing an extreme reservation price shift away from fair mid on the inventory side. This makes our quotes on A drastically asymmetric — aggressively attracting client flow in the reducing direction until inventory naturally recovers below 90%.
+When `_hedge_emergency` is active, `compute_quotes` multiplies the A-S inventory-risk term by `emergency_penalty_multiplier` (default 5×), forcing an extreme reservation price shift away from fair mid on the inventory side. This makes our quotes on A drastically asymmetric — aggressively attracting client flow in the reducing direction until inventory naturally recovers below the limit.
 
 Each hedge leg is recorded in `_fill_history` with `is_hedge=True` and `venue="B"` or `"C"`.
 
@@ -182,27 +189,31 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 | Parameter | Default | Description |
 |---|---|---|
 | `gamma` | 0.1 | Risk-aversion coefficient |
-| `k` | 1.5 | Order arrival decay rate |
-| `T` | `8 × 3600` | Session horizon (one FX session) |
+| `k` | 0.3 | Order arrival decay rate |
+| `omega` | `1 / (8 × 3600)` | Infinite-horizon discount rate (risk horizon ≈ one FX session) |
 | `alpha_spread` | 0.5 | Inventory spread widening coefficient |
 | `use_asymmetric_delta` | True | Guéant asymmetric half-spreads |
-| `terminal_penalty_strength` | 5.0 | End-of-session inventory urgency |
 | `n_levels` | 10 | Price levels each side |
 | `beta` | 0.3 | Size decay across levels |
-| `Q_base` | 100,000 | Base EUR size at best level |
+| `Q_base` | 70,000 | Base EUR size at best level |
 | `tick_size` | 0.0001 | 1 bp tick |
-| `requote_threshold_spread_fraction` | 0.25 | Min price move (fraction of spread) to trigger requote |
-| `stale_steps` | 300 | Age threshold for staleness rule |
-| `stale_inventory_fraction` | 0.5 | Inventory stress threshold for staleness rule |
+| `requote_threshold_spread_fraction` | 0.25 | Min price move (fraction of spread) to trigger P3 requote |
+| `stale_s` | 40.0 | Age threshold for staleness rule (seconds) |
+| `stale_tight_fraction` | 0.7 | Spread multiplier when P6 refreshes stale orders |
+| `inventory_requote_fraction` | 0.05 | \|Δ inventory\| / K threshold to trigger P5 requote |
+| `imbalance_min_samples` | 10 | Minimum fills before the imbalance signal is trusted |
 | `imbalance_window` | 50 | Rolling window for OFI signal |
 | `alpha_imbalance` | 0.0002 | OFI tilt scaling coefficient |
-| `vol_window` | 6000 | EWMA vol estimation window (steps) |
+| `vol_window_s` | 60.0 | EWMA vol estimation lookback (seconds) |
+| `vol_min_s` | 2.0 | Warm-up before switching to realized vol (seconds) |
 | `weight_B / weight_C` | 0.75 / 0.25 | Volume weights for fair mid |
 | `latency_B_s / latency_C_s` | 0.200 / 0.170 | Data latency (seconds) |
 | `latency_hft_s` | 0.050 | HFT latency |
-| `delta_limit` | 0.90 | Hedge trigger (fraction of capital) |
-| `hedge_partial_limit` | 0.80 | If post-hedge ratio still above this, emergency mode activates |
+| `delta_limit` | 0.60 | Hedge trigger (fraction of `K/2`; applied independently to EUR and USD legs) |
+| `hedge_partial_limit` | 0.80 | If post-hedge \|q\| > `hedge_partial_limit × (K/2)`, emergency mode activates |
 | `emergency_penalty_multiplier` | 5.0 | A-S penalty amplifier during emergency (skews quotes on A) |
+| `eod_flat_interval` | 0.0 | EOD-flat cadence in seconds; `0.0` disables continuous-running EOD flats |
+| `min_edge_multiple` | 1.0 | Inception spread floor as a multiple of `fee_A_maker × fair_mid` (≥ 1 guarantees gross-positive fills) |
 | `fee_A_maker` | 0.0001 | Exchange A maker fee |
 | `fee_A_taker` | 0.0004 | Exchange A taker fee |
 | `fee_B_maker` | 0.00009 | Exchange B maker fee |
@@ -216,8 +227,8 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 |---|---|
 | `compute_quotes(step, t, resting_orders)` | Returns `(List[Order], List[str])` — new quotes + IDs to cancel |
 | `on_fill(event)` | Callback registered with `Order_book` — updates inventory, logs fill, queues re-quote or top-up |
-| `execute_hedge(step, t, fair_mid)` | Executes hedge if `needs_hedge()`, records legs in trade history. Returns True if hedge fired |
-| `needs_hedge()` | True if `|inventory| / capital_K > delta_limit` |
+| `execute_hedge(step, t)` | Executes hedge if `needs_hedge(fair_mid)`, records legs in trade history. Fair mid is computed internally from the cached B/C quotes set during `compute_quotes`. Returns True if hedge fired |
+| `needs_hedge(fair_mid=1.0)` | True if either `|inventory| > delta_limit × (K/2)` or `|inventory × fair_mid| > delta_limit × (K/2)` |
 | `hedge_order(depth_B, depth_C, fair_mid, sigma)` | Returns `(size_B, size_C, fee_cost)` — optimal routing split capped at available depth |
 | `trade_history` | Property — returns full fill log as DataFrame (14 columns) |
 | `snapshot(step, t)` | Full dict of intermediate quoting quantities for diagnostics |
@@ -258,7 +269,7 @@ for step in range(stock.n_steps):
     book.cancel_orders(cancels)
     book.post_mm_quotes(quotes)
     # ... route client orders ...
-    mm.execute_hedge(step, t, fair_mid)
+    mm.execute_hedge(step, t)
 
 rep = PnLTracker.report(mm.trade_history, current_mid=fair_mid)
 print(rep)
