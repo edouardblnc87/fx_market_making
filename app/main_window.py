@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         r2.addWidget(self._origin)
         r2.addSpacing(12)
         r2.addWidget(QLabel("DT (s):"))
-        self._dt = _spin(0.1, 0.001, 10.0, 3, 0.05)
+        self._dt = _spin(0.05, 0.001, 10.0, 3, 0.05)
         r2.addWidget(self._dt)
         r2.addStretch()
         lay.addLayout(r2)
@@ -294,6 +294,16 @@ class MainWindow(QMainWindow):
         self._seed_p2 = _ispin(99, 0, 99999)
         self._seed_p2.setToolTip("Fresh stock seed for Phase 2 & 3 (different path from Phase 1)")
         r3.addWidget(self._seed_p2)
+        r3.addSpacing(8)
+        r3.addWidget(QLabel("N Days P2:"))
+        self._n_days_p2 = _ispin(15, 1, 365)
+        self._n_days_p2.setToolTip("Simulation duration for Phase 2 & 3")
+        r3.addWidget(self._n_days_p2)
+        r3.addSpacing(8)
+        r3.addWidget(QLabel("DT P2 (s):"))
+        self._dt_p2 = _spin(0.05, 0.001, 10.0, 3, 0.05)
+        self._dt_p2.setToolTip("Time step for Phase 2 & 3 (smaller = finer resolution for HFT)")
+        r3.addWidget(self._dt_p2)
         self._lbl_p2 = QLabel("(new stock path · calibrated config if available)")
         self._lbl_p2.setObjectName("lbl_status_p2")
         r3.addSpacing(12)
@@ -513,14 +523,14 @@ class MainWindow(QMainWindow):
     # ── Phase 2 ───────────────────────────────────────────────────────────
 
     def _stock_params_p2(self) -> dict:
-        """Stock params dict for Phase 2/3, using Seed P2."""
+        """Stock params dict for Phase 2/3, using Seed P2 with its own N Days and DT."""
         return {
             "model":   self._model.currentText(),
             "seed":    self._seed_p2.value(),
-            "n_days":  self._n_days.value(),
+            "n_days":  self._n_days_p2.value(),
             "vol":     self._vol.value(),
             "origin":  self._origin.value(),
-            "dt":      self._dt.value(),
+            "dt":      self._dt_p2.value(),
             "alpha":   self._g_alpha.value(),
             "beta":    self._g_beta.value(),
             "lam":     self._g_lam.value(),

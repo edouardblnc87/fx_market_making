@@ -41,6 +41,7 @@ from typing import Callable, Any, Dict, List, Optional, Tuple
 # ── Raw pickle helpers ─────────────────────────────────────────────────────────
 
 def save_obj(obj: Any, path) -> None:
+    """Pickle obj to path, creating parent directories as needed."""
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
@@ -49,6 +50,7 @@ def save_obj(obj: Any, path) -> None:
 
 
 def load_obj(path) -> Any:
+    """Load and return a pickled object from path."""
     path = pathlib.Path(path)
     with open(path, "rb") as f:
         obj = pickle.load(f)
@@ -64,12 +66,14 @@ def _meta_path(pkl_path: pathlib.Path) -> pathlib.Path:
 
 
 def _save_meta(pkl_path: pathlib.Path, meta: Dict) -> None:
+    """Write meta dict as JSON to the companion .meta.json file."""
     mp = _meta_path(pkl_path)
     with open(mp, "w") as f:
         json.dump(meta, f)
 
 
 def _load_meta(pkl_path: pathlib.Path) -> Optional[Dict]:
+    """Load and return the companion meta dict, or None if it does not exist."""
     mp = _meta_path(pkl_path)
     if not mp.exists():
         return None
@@ -316,6 +320,7 @@ _MARKETS_PATH = pathlib.Path(__file__).parent / "saved_markets.pkl"
 
 
 def save_markets(stock, market_B, market_C, path=None):
+    """Pickle stock, market_B, and market_C together to path (legacy helper)."""
     path = pathlib.Path(path) if path else _MARKETS_PATH
     with open(path, "wb") as f:
         pickle.dump({"stock": stock, "market_B": market_B, "market_C": market_C}, f,
@@ -324,6 +329,7 @@ def save_markets(stock, market_B, market_C, path=None):
 
 
 def load_markets(path=None):
+    """Load stock, market_B, and market_C from a previously saved markets pickle (legacy helper)."""
     path = pathlib.Path(path) if path else _MARKETS_PATH
     with open(path, "rb") as f:
         d = pickle.load(f)
@@ -332,6 +338,7 @@ def load_markets(path=None):
 
 
 def save_session(stock, market_B, market_C, market_maker, book, controller, path=None):
+    """Pickle the full simulation session (all components) to path (legacy helper)."""
     path = pathlib.Path(path) if path else _DEFAULT_PATH
     session = {
         "stock": stock, "market_B": market_B, "market_C": market_C,
@@ -343,6 +350,7 @@ def save_session(stock, market_B, market_C, market_maker, book, controller, path
 
 
 def load_session(path=None):
+    """Load the full simulation session (all components) from a previously saved pickle (legacy helper)."""
     path = pathlib.Path(path) if path else _DEFAULT_PATH
     with open(path, "rb") as f:
         session = pickle.load(f)

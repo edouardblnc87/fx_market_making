@@ -20,6 +20,7 @@ class VolatilityCalibrator:
     """Calibrate volatility model from Phase 1 market B mid-prices."""
 
     def __init__(self, mid_prices: np.ndarray, dt: float) -> None:
+        """Store mid-prices and time step; pre-compute log-returns for all fit methods."""
         self._prices = mid_prices
         self._dt = dt
         self._dt_frac = dt / TRADING_SECONDS_PER_YEAR

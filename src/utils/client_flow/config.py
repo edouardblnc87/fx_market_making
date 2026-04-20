@@ -1,3 +1,5 @@
+"""Default parameters for the client order flow arrival and size models."""
+
 # ---------------------------------------------------------------------------
 # Client order flow — default parameters
 # Based on Avellaneda & Stoikov (2006), Sections 2.4–2.5

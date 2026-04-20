@@ -23,6 +23,7 @@ class SpreadCalibrator:
         step_log: pd.DataFrame,
         capital_K: float,
     ) -> None:
+        """Prepare MM fills and step log for OLS regression on effective spreads."""
         self._capital_K = capital_K
 
         mm = fill_df[~fill_df["is_hedge"]].copy()

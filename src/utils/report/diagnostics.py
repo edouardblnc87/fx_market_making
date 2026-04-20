@@ -59,18 +59,21 @@ def _ds(df: pd.DataFrame, n: int = _MAX_PTS) -> pd.DataFrame:
 
 
 def _vlines(ax, xs, color=_HED, alpha=0.7, lw=1.2, label=None):
+    """Draw a dashed vertical line at each x value; labels only the first."""
     for i, x in enumerate(xs):
         ax.axvline(x, color=color, alpha=alpha, lw=lw,
                    linestyle="--", label=label if i == 0 else None)
 
 
 def _fig(title: str, figsize=(14, 8)):
+    """Create a dark-themed figure with the given title and return it."""
     fig = plt.figure(figsize=figsize, facecolor=_BG)
     fig.suptitle(title, color=_TXT, fontsize=11, y=0.98)
     return fig
 
 
 def _ax_style(ax, xlabel="", ylabel="", title=""):
+    """Apply standard dark-theme styling and optional labels to an axes object."""
     ax.set_facecolor(_AX)
     ax.tick_params(colors=_TXT)
     if xlabel:
@@ -94,6 +97,7 @@ class DiagnosticsReport:
     """
 
     def __init__(self, ctrl, n_days: float | None = None):
+        """Extract step log, trade history, and derived metrics from a completed Controller."""
         self.ctrl = ctrl
         self.mm   = ctrl.quoter
         self.cfg  = ctrl.quoter.cfg
@@ -608,6 +612,7 @@ class DiagnosticsReport:
     # ── Full report ────────────────────────────────────────────────────────────
 
     def report(self):
+        """Render all five diagnostic figures in sequence."""
         self.plot_overview()
         self.plot_spread_and_skew()
         self.plot_fills()

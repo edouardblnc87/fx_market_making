@@ -1,9 +1,12 @@
+"""Configuration dataclass for the HFT market-making agent."""
+
 from __future__ import annotations
 from dataclasses import dataclass
 
 
 @dataclass
 class HFTConfig:
+    """Tunable parameters for the HFT agent's quoting, state machine, and risk controls."""
     # Quoting — spread_fraction must stay below QuoterConfig.stale_tight_fraction
     # so HFTs are always tighter than even our most aggressive Priority-6 reprice.
     spread_fraction:          float = 0.4     # fraction of A-S half_spread

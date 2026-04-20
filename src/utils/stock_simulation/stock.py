@@ -1,3 +1,5 @@
+"""Stock simulation wrapper providing GBM, Heston, and GARCH price paths."""
+
 import numpy as np
 from scipy import stats
 from .stochastic_simulation import *
@@ -6,8 +8,10 @@ import matplotlib.pyplot as plt
 
 
 class Stock(object):
+    """Holds parameters and simulated price paths for a single instrument."""
 
     def __init__(self, drift: float, vol: float, origin: float = 100, tick_size: float = 0.0):
+        """Initialise Stock with annualised drift and vol; simulation is empty until simulate_* is called."""
         self.drift      = drift
         self.vol        = vol
         self.origin     = origin
@@ -76,7 +80,7 @@ class Stock(object):
         self.sim_type      = 'garch'
 
     def simulate_gbm(self, n_days: int = 30, dt_seconds: float = 0.05):
-
+        """Simulate a Geometric Brownian Motion price path and store it on the instance."""
         self.empty_sim = False
         time_grid = generate_time_grid(n_days, dt_seconds)
         path, vol_realized, mu_realized, dt, n_steps  = generate_gbm_path(time_grid, self.origin, self.drift, self.vol, self.tick_size)
@@ -112,6 +116,7 @@ class Stock(object):
 # ── Plots ──────────────────────────────────────────────────────────────────
 
     def plot_path(self):
+        """Plot the simulated price path on a dark-themed figure."""
         if self.simulation is None:
             print("No path generated yet — run simulate_gbm or simulate_heston first.")
             return
@@ -186,6 +191,7 @@ class Stock(object):
         plt.show()
 
     def sanity_check(self):
+        """Print realized-vol / drift / kurtosis statistics and plot the path + return histogram."""
         if self.simulation is None:
             print("No path generated yet — run simulate_gbm or simulate_heston first.")
             return

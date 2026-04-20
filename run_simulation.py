@@ -34,10 +34,17 @@ sys.path.insert(0, str(_ROOT))
 
 # ── Stock & market ──────────────────────────────────────────────────────────
 MODEL    = "GARCH"   # "GARCH" | "GBM" | "Heston"
-SEED     = 32        # stock seed for Phase 1 (and client-flow seed)
+SEED     = 32        # stock seed for Phase 1 and Comparison
 SEED_P2  = 99        # stock seed for Phase 2 & 3 (different path → fair test)
-N_DAYS   = 1 #30        # simulation duration in trading days
-DT_SEC   = 0.2 #0.1       # time step in seconds
+
+# ── Phase 1 & Calibrated Comparison (coarser grid — calibration doesn't need HFT resolution) ──
+N_DAYS   = 30        # simulation duration in trading days
+DT_SEC   = 0.1       # time step in seconds
+
+# ── Phase 2 & Phase 3 / HFT (finer grid required for HFT latency modelling) ──
+N_DAYS_P2 = 15       # fewer days to keep runtime manageable at finer dt
+DT_SEC_P2 = 0.05     # finer time step: one step ≈ HFT latency (50 ms)
+
 VOL      = 0.07      # annualised volatility (EUR/USD baseline ≈ 7%)
 ORIGIN   = 1.10      # starting EUR/USD price
 CAPITAL  = 1_000_000 # market-maker capital K in EUR/USD
@@ -119,6 +126,17 @@ def _capture_report(fn) -> tuple[str, list]:
     return text, figs
 
 
+def _pause(next_step: str) -> None:
+    """Block the script (but keep windows interactive) until user clicks Continue."""
+    from PySide6.QtWidgets import QMessageBox
+    mb = QMessageBox()
+    mb.setWindowTitle("Paused")
+    mb.setText(f"Explore the results, then click Continue to run:\n\n  {next_step}")
+    mb.setStandardButtons(QMessageBox.Ok)
+    mb.button(QMessageBox.Ok).setText(f"Continue → {next_step}")
+    mb.exec()   # local event loop — windows stay live until user clicks
+
+
 def _show(title: str, report_fn=None, report_text: str = "") -> ResultWindow:
     """Open a ResultWindow with all figures at once (non-blocking)."""
     if report_fn is not None:
@@ -132,21 +150,21 @@ def _show(title: str, report_fn=None, report_text: str = "") -> ResultWindow:
     return win
 
 
-def _build_stock(seed: int, n_days: int):
+def _build_stock(seed: int, n_days: int, dt: float = DT_SEC):
     from utils.stock_simulation.stock import Stock
     np.random.seed(seed)
     stock = Stock(drift=0.0, vol=VOL, origin=ORIGIN)
     if MODEL == "GBM":
-        stock.simulate_gbm(n_days=n_days, dt_seconds=DT_SEC)
+        stock.simulate_gbm(n_days=n_days, dt_seconds=dt)
     elif MODEL == "Heston":
         stock.simulate_heston(
-            n_days=n_days, dt_seconds=DT_SEC,
+            n_days=n_days, dt_seconds=dt,
             kappa=HESTON_KAPPA, theta=HESTON_THETA,
             xi=HESTON_XI, rho=HESTON_RHO,
         )
     else:
         stock.simulate_garch(
-            n_days=n_days, dt_seconds=DT_SEC,
+            n_days=n_days, dt_seconds=dt,
             alpha=GARCH_ALPHA, beta=GARCH_BETA,
             lam=GARCH_LAM, sigma_J=GARCH_SIGMA_J,
         )
@@ -216,6 +234,8 @@ if RUN_PHASE1:
     from utils.market_maker.quoter import QuoterConfig
     ctrl_p1 = _run_phase(market_B_p1, market_C_p1, QuoterConfig(), seed=SEED)
     _show("Phase 1 — Results", ctrl_p1.report)
+    if RUN_CALIBRATION:
+        _pause("Calibration")
 
 # ---------------------------------------------------------------------------
 # Step 3 — Calibration
@@ -233,6 +253,8 @@ if RUN_CALIBRATION:
         summary = builder.summary()
         print(summary)
         _show("Calibration Summary", report_text=summary)
+        if RUN_PHASE1_CALIBRATED:
+            _pause("Phase 1 Calibrated — Comparison")
 
 # ---------------------------------------------------------------------------
 # Step 4 — Phase 1 Calibrated (same stock path as Phase 1, calibrated config)
@@ -245,6 +267,8 @@ if RUN_PHASE1_CALIBRATED:
         _header(f"Step 4 — Phase 1 Calibrated  (same path, seed={SEED})")
         ctrl_p1cal = _run_phase(market_B_p1, market_C_p1, cal_cfg, seed=SEED)
         _show("Phase 1 Calibrated — Comparison (same path as Phase 1)", ctrl_p1cal.report)
+        if RUN_PHASE2:
+            _pause("Phase 2 — fresh stock")
 
 # ---------------------------------------------------------------------------
 # Step 5 — Phase 2 (calibrated parameters, fresh stock, seed = SEED_P2)
@@ -254,18 +278,20 @@ ctrl_p2      = None
 market_B_p2  = None
 market_C_p2  = None
 if RUN_PHASE2:
-    _header(f"Step 5 — Phase 2  (seed={SEED_P2}, "
+    _header(f"Step 5 — Phase 2  (seed={SEED_P2}, {N_DAYS_P2}d, dt={DT_SEC_P2}s, "
             f"{'calibrated' if cal_cfg else 'default'} config)")
 
     from utils.market_maker.quoter import QuoterConfig
     cfg_p2 = cal_cfg if cal_cfg is not None else QuoterConfig()
 
-    stock_p2 = _build_stock(SEED_P2, N_DAYS)
+    stock_p2 = _build_stock(SEED_P2, N_DAYS_P2, dt=DT_SEC_P2)
     market_B_p2, market_C_p2 = _build_markets(stock_p2)
     print(f"  Fresh stock: {stock_p2.n_steps:,} steps  (seed={SEED_P2})")
 
     ctrl_p2 = _run_phase(market_B_p2, market_C_p2, cfg_p2, seed=SEED_P2)
     _show("Phase 2 — Results", ctrl_p2.report)
+    if RUN_PHASE3_HFT:
+        _pause("Phase 3 — HFT")
 
 # ---------------------------------------------------------------------------
 # Step 6 — Phase 3 (calibrated MM + HFT, same fresh stock as Phase 2)
@@ -282,14 +308,14 @@ if RUN_PHASE3_HFT:
         seed_p3 = SEED_P2
         print(f"  Reusing Phase 2 markets (seed={SEED_P2})")
     else:
-        stock_p3 = _build_stock(SEED_P2, N_DAYS)
+        stock_p3 = _build_stock(SEED_P2, N_DAYS_P2, dt=DT_SEC_P2)
         market_B_p3, market_C_p3 = _build_markets(stock_p3)
         seed_p3 = SEED_P2
         print(f"  Fresh stock built (seed={SEED_P2})")
 
     ctrl_p3 = _run_phase(
         market_B_p3, market_C_p3, cfg_p3, seed=seed_p3,
-        hft=True, n_days=float(N_DAYS),
+        hft=True, n_days=float(N_DAYS_P2),
     )
     _show("Phase 3 — HFT Results", ctrl_p3.report)
 

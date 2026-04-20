@@ -1,3 +1,5 @@
+"""Utility constants and notes for the intraday order-book time grid."""
+
 import numpy as np
 
 # ─────────────────────────────────────────────────────────────────────────────

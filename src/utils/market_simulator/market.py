@@ -1,3 +1,5 @@
+"""Market simulator: noised mid-price generation and bid/ask spread construction."""
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -7,7 +9,10 @@ from .spread_utils import compute_rv_zero_mean, evolve_s_excess
 
 
 class Market(object):
+    """Wraps a Stock path with microstructure noise and configurable bid/ask spread models."""
+
     def __init__(self, stock: Stock):
+        """Initialise the Market wrapper around a Stock, with all price arrays set to None."""
         self.stock = stock
         self.vol_noise: np.array | None = None
         self.noised_mid_price: np.array | None = None
@@ -36,12 +41,14 @@ class Market(object):
         self._active_spread: str | None = None
 
     def generate_noise(self, vol_factor: float):
+        """Generate a Gaussian noise array scaled by vol_factor times the stock's annualised vol."""
         dt_frac = self.stock.time_step / TRADING_SECONDS_PER_YEAR
         Z = np.random.standard_normal(self.stock.n_steps + 1)
         self.vol_noise = vol_factor * self.stock.vol * np.sqrt(dt_frac) * Z
         return self.vol_noise
 
     def generate_noised_mid_price(self, vol_factor: float = 0.1):
+        """Add microstructure noise to the stock path and store as noised_mid_price."""
         if self.stock.empty_sim:
             print("Stock path hasn't been initialized — running simulation.")
             self.stock.simulate_gbm()
@@ -82,7 +89,7 @@ class Market(object):
         return self.depth
 
     def build_static_spread(self, spread_bps: float = 1.0):
-
+        """Build a constant bid/ask spread with fixed half-spread in basis points."""
         if self.noised_mid_price is None:
             print(f"Error, no prices generated for this market, run generate_noised_mid_price")
         # Half-spread expressed in bps — price-independent
@@ -94,6 +101,7 @@ class Market(object):
 
     
     def build_stochastic_spread(self, window_size = 50, alpha = 0.5, spread_bps: float = 1.0):
+        """Build a spread that widens proportionally to rolling realized volatility."""
         # Baseline half-spread in bps — price-independent
         spread_0 = self.noised_mid_price * spread_bps / 10_000
 
@@ -114,6 +122,7 @@ class Market(object):
         self._active_spread = "Sto"
 
     def build_adaptive_spread(self, window_size=50, alpha=0.5, spread_bps: float = 1.0):
+        """Build a vol-adaptive spread with a floor at 10% of baseline to prevent collapse."""
         # Baseline half-spread in bps — price-independent
         spread_0 = self.noised_mid_price * spread_bps / 10_000
 
@@ -334,6 +343,7 @@ class Market(object):
         return mapping[self._active_spread]
 
     def build_spread(self, option = "Static", **kwargs):
+        """Dispatch to the selected spread model: Static, Sto, Adaptive, Asym, or Skew."""
         if option == "Static":
             self.build_static_spread(**kwargs)
         if option == "Sto":
@@ -602,6 +612,7 @@ class Market(object):
         plt.show()
 
     def plot_comparison(self):
+        """Plot the true GBM path versus the noised mid-price with a deviation panel below."""
         if self.noised_mid_price is None or self.stock.simulation is None:
             raise ValueError("Both GBM path and noised mid price must be computed first.")
 
@@ -646,6 +657,7 @@ class Market(object):
     # ── Sanity check ──────────────────────────────────────────────────────────
 
     def sanity_check(self):
+        """Print noise and vol statistics comparing the noised mid-price to the true GBM path."""
         if self.noised_mid_price is None or self.stock.simulation is None:
             raise ValueError("Run generate_noised_mid_price before calling sanity_check.")
 

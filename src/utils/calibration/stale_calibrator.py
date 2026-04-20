@@ -27,6 +27,7 @@ class StaleCalibrator:
     """Estimate stale_s from the empirical fill rate at level 1."""
 
     def __init__(self, fill_df: pd.DataFrame, step_log: pd.DataFrame) -> None:
+        """Store MM fills and step log for stale threshold estimation."""
         self._mm       = fill_df[~fill_df["is_hedge"]].copy()
         self._step_log = step_log
 

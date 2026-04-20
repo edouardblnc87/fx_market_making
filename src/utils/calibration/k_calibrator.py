@@ -26,6 +26,7 @@ class KCalibrator:
     """Calibrate order-arrival intensity decay k from Phase 1 MM fills."""
 
     def __init__(self, fill_df: pd.DataFrame) -> None:
+        """Filter MM fills from the trade history for k estimation."""
         self._mm = fill_df[~fill_df["is_hedge"]].copy()
 
     def fit(self) -> dict:
@@ -47,6 +48,7 @@ class KCalibrator:
     # ------------------------------------------------------------------
 
     def _fit_direction(self, df: pd.DataFrame) -> float:
+        """Fit k for one direction (buy or sell) via OLS on log(fills) vs distance in bps."""
         if len(df) < 10:
             return _DEFAULTS["k"]
 

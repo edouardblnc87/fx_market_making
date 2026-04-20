@@ -57,6 +57,7 @@ class ClientFlowGenerator:
         config: ClientFlowConfig | None = None,
         seed: int | None = None,
     ):
+        """Initialise the generator with an optional config and random seed."""
         self.cfg = config if config is not None else ClientFlowConfig()
         self._rng = np.random.default_rng(seed)
 
