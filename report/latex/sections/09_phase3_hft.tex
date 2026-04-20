@@ -1,6 +1,201 @@
 \section{Phase 3 --- Fallback Liquidity Under HFT Competition}
 \label{sec:phase3}
-% Subject task 9 --- HFTs with 50ms latency edge quote tight spreads on A.
-% TODO: small-vs-large-trade outcomes, volatility-spike and HFT-offline
-% scenarios, impact on P\&L and on exchange A customers, role of DMM as
-% fallback liquidity provider.
+
+\subsection{Context}
+
+By Phase~3 the exchange is no longer ours alone: a latency-advantaged
+HFT has installed itself on the book, sees B and C with 50\,ms of
+lag (against our 200 / 170\,ms) and quotes tighter than the A-S
+prescription whenever it finds it profitable to do so. The brief
+reframes the DMM role: we are not here to out-earn the HFT on
+frictionless flow --- that is a losing race on the latency axis ---
+but to remain the book's \emph{fallback} when the HFT pulls out.
+The question this section answers is quantitative. When the HFT is
+active we should earn less because we are being skimmed. When the
+HFT withdraws or goes one-sided we should absorb flow that would
+otherwise be unserved, and that absorption is where our DMM value
+accrues. Phase~3 runs a controlled 15-day backtest that contains
+both regimes and decomposes the resulting P\&L accordingly.
+
+\subsection{What we simulate}
+
+\paragraph{A latency-advantaged competitor.} The HFT is modelled as
+a second market-making agent quoting on Exchange~A. It reads the
+B and C mids with a single 50\,ms lag --- four times shorter than
+ours --- which lets it refresh its quotes before our order book has
+seen the same move. It quotes symmetrically at $40\%$ of the
+Avellaneda--Stoikov half-spread (using its own internal
+$\gamma$, $k$, $\omega$, matched to our Phase~1 defaults so the
+comparison is not muddied by a different utility function), so when
+it is present it is \emph{always} the tightest book on the venue.
+This is the adverse-selection regime customers face in steady state
+on a market that has both a DMM and HFT liquidity.
+
+\paragraph{A four-state behaviour model.} A purely always-on HFT
+would not produce interesting dynamics --- it would simply compress
+the spread uniformly. Real HFTs withdraw under stress, re-post
+when conditions normalise and lean one-sided when inventory or
+expected toxicity warrant it. We encode this with a state machine
+over four modes: \textsc{active} (both sides quoted),
+\textsc{one-sided-bid} (only the bid remains; the ask is pulled
+because it is stale-cheap), \textsc{one-sided-ask} (symmetric) and
+\textsc{offline} (no quotes at all). Transitions are driven by, in
+priority order: (i)~an exogenous schedule of scripted events,
+(ii)~a recovery timer that returns an \textsc{offline} HFT to
+\textsc{active} after 30\,s, (iii)~a profitability floor --- if the
+expected net half-spread after fees falls below $0.3$~bps the HFT
+goes \textsc{offline}, (iv)~a volatility-stress threshold on an EWMA
+estimator of realised vol, and (v)~a short-horizon trend detector
+that flips the HFT one-sided when the mid moves by more than
+$0.4$~bps over a 5\,s window (the stale side would be too cheap
+given the detected drift). These triggers are deliberately
+reactive: they model an HFT that \emph{chooses} to step back when
+its information advantage is not large enough to cover adverse
+selection, not one that simply stops at random.
+
+\paragraph{The realistic monthly schedule.} Layered on top of the
+reactive triggers is a scheduled calendar of scripted events. For
+the 15-day backtest the calendar contains eight events:
+two full-outage \textsc{offline} windows (a brief 25-minute outage
+at $\sim\!10\%$ of the window and a longer 2.4-hour episode at
+$40\%$); two volatility-triggered \textsc{offline} blackouts at
+$68\%$ and $88\%$; and four one-sided squeezes --- a 1.2-hour
+\textsc{one-sided-bid} at $23\%$, a 1.6-hour \textsc{one-sided-ask}
+at $57\%$, and two 2-hour one-sided events near the tail at $80\%$
+and $93\%$. This is not an average-case run; Phase~3 deliberately
+stresses the system so that the fallback contribution is
+observable rather than buried in the noise of a typical day.
+
+\paragraph{Everything else is held fixed.} The backtest reuses the
+Phase~2 calibrated \texttt{QuoterConfig}, the same 15-day stock
+path, the same client-flow seed and the same capital. The only
+change relative to Phase~2 is the presence of the HFT agent. Any
+difference in P\&L, inventory or fill count is therefore
+attributable to competition and withdrawal, not to a different
+random draw.
+
+\subsection{Backtest results}
+
+Table~\ref{tab:p3-vs-p2} reports the two runs side by side. The
+Phase~2 column reproduces the fresh-path numbers already shown in
+Table~\ref{tab:p1-vs-p2}; the Phase~3 column is the identical run
+with the HFT agent enabled under the schedule above.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lrr}
+\toprule
+Metric & Phase~2 (no HFT) & Phase~3 (HFT on) \\
+\midrule
+MM fills                          & $14{,}084$    & $10{,}763$ \\
+Fills per day                     & $939$         & $718$ \\
+Total MtM P\&L (USD)              & $+5{,}761$    & $+675$ \\
+\phantom{x}Realised cash P\&L     & $+61{,}629$   & $-120{,}877$ \\
+\phantom{x}Unrealised P\&L        & $-55{,}869$   & $+121{,}552$ \\
+Inception-spread P\&L (USD)       & $+5{,}569$    & $+3{,}510$ \\
+Inventory-reval P\&L (USD)        & $+2{,}000$    & $-1{,}603$ \\
+Total fees (USD)                  & $1{,}808$     & $1{,}233$ \\
+\phantom{x}Maker (A) / Taker (B,C)& $1{,}483$ / $325$ & $1{,}233$ / $0$ \\
+Hedge legs                        & $6$           & $0$ \\
+Final inventory (EUR)             & $-49{,}104$   & $+106{,}835$ \\
+Mean quoted spread on A (bps)     & $8.04$ ($\sigma\,1.48$) & $6.94$ ($\sigma\,0.70$) \\
+\bottomrule
+\end{tabular}
+\caption{Phase~2 (calibrated quoter, no competitor) vs Phase~3
+(identical path, HFT enabled with the 8-event realistic schedule).
+Same stock path, same client-flow seed, same \texttt{QuoterConfig}.}
+\label{tab:p3-vs-p2}
+\end{table}
+
+\subsection{Analysis}
+
+\paragraph{Competition skims the easy flow.} The HFT absorbs roughly
+a quarter of the fills we would otherwise have captured: MM fills
+per day fall from 939 to 718 ($-23.5\%$) and inception-spread P\&L
+drops from 5\,569~USD to 3\,510~USD ($-37\%$), faster than the
+fill-count decline, because the HFT preferentially wins the fills
+closest to the mid --- the ones on which our inception spread is
+thinnest to begin with. Consistently, the mean quoted spread
+\emph{visible on Exchange~A} tightens from 8.04~bps to 6.94~bps
+(and its volatility collapses from $\sigma = 1.48$ to $0.70$
+bps), because whenever the HFT is \textsc{active} its 40\%-A-S
+quotes anchor the top of book. In calm conditions, the HFT wins;
+this is the economically efficient outcome from a customer's
+perspective.
+
+\paragraph{One-sided regimes push inventory, not hedges.} Final EUR
+inventory flips sign and more than doubles in magnitude, from
+$-49\,104$ in Phase~2 to $+106\,835$ in Phase~3. The mechanism is
+mechanical: when the HFT enters \textsc{one-sided-bid}, its ask is
+withdrawn and ours is the only ask in the book, so customer
+buy-MOs hit us until the HFT returns; our EUR inventory falls. The
+symmetric regime (\textsc{one-sided-ask}) lifts it back. With four
+one-sided events on the 15-day calendar we are repeatedly pushed
+off neutral. Yet \emph{zero} hedge legs fire against six in
+Phase~2. The path never breaches the $90\%$ delta limit --- the
+calibrated $\gamma$ and $\omega$ keep the A-S inventory penalty
+low enough that organic mean-reversion between one-sided windows
+is preferred over paying the 2--3~bps B/C taker fee. The switch
+from $325$~USD of taker fees in Phase~2 to zero in Phase~3 is the
+fingerprint of this behaviour, and it is also why total fees
+\emph{fall} in the HFT run despite otherwise similar maker
+activity.
+
+\paragraph{P\&L is path-dependent, but not zero.} Total MtM P\&L
+collapses from $+5\,761$~USD to $+675$~USD, but this headline hides
+the economics. Realised cash and unrealised valuation diverge by
+roughly $\pm 121\,000$~USD each --- a large open EUR position
+marked at a favourable mid offsets a large realised loss from
+lifting customers during one-sided squeezes. The \emph{inception
+spread} we still capture (3\,510~USD over the window,
+$\approx 234$~USD/day) is the genuine DMM revenue: the part of
+customer flow we intermediated when the HFT was not there to
+serve it. Strip the inventory-reval leg off and that is what the
+balance sheet records at month-end.
+Figure~\ref{fig:p3-inv-vs-price} --- inventory overlaid on the
+EUR/USD path, as produced by \texttt{ctrl\_hft.report()} in the
+calibration notebook --- makes the inventory argument visible.
+The two sustained inventory swings align with the
+\textsc{one-sided} windows on the HFT schedule: each time the HFT
+withdraws one side of its quotes, the DMM becomes the only
+counterparty on that side and absorbs the flow for the duration
+of the window. Between windows inventory drifts back toward
+neutral without any hedge leg being triggered, consistent with
+the final two rows of Table~\ref{tab:p3-vs-p2}.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase3-inventory-vs-price.png}
+\caption{Phase~3 EUR/USD price path alongside MM EUR inventory
+over the 15-day run (exported from \texttt{ctrl\_hft.report()} in
+\texttt{test/phase2\_calibration.ipynb}). The two sustained
+inventory swings correspond to the scheduled HFT
+\textsc{one-sided-bid} and \textsc{one-sided-ask} windows; the
+inventory never reaches the $\pm 90\%$-of-$K/2$ hedge trigger,
+which is why no hedge legs fire in Phase~3.}
+\label{fig:p3-inv-vs-price}
+\end{figure}
+
+\subsection{Implications for Exchange A's customers --- and for our contract}
+
+For customers on Exchange~A the arrival of the HFT is
+unambiguously good news in calm conditions: effective top-of-book
+spreads tighten by roughly $14\%$ (8.04~bps $\to$ 6.94~bps mean
+quoted spread) and the variance of the quoted spread is cut by
+more than half. The HFT is, in effect, the low-cost liquidity
+provider the exchange needs.
+
+The tail is where our value shows up. Every one-sided and
+\textsc{offline} window on the Phase~3 timeline is a moment at
+which the HFT's quote disappears from one or both sides of the
+book, and it is the DMM commitment to always quote both sides
+that keeps the venue functional through those episodes. A DMM
+contract priced on volume alone would reward the wrong behaviour
+here, because volume in the HFT's preferred regime will accrue to
+the HFT; what the exchange is actually buying from us is
+\emph{availability at tails}. The $+3{,}510$~USD inception-spread
+P\&L we earn on a path populated by tail events is an empirical
+estimate of that availability premium. Designing DMM compensation
+to reference availability (e.g., rebate-per-second-quoted,
+penalties on one-sided events caused by the DMM) rather than
+fill count is the contract-theoretic implication.

@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.3.9)  20 APR 2026 23:37
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.3.9)  21 APR 2026 00:36
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -498,19 +498,19 @@ File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 
 [2] (sections/00_introduction.tex [3]) (sections/00b_literature_review.tex
 [4]) (sections/01_orderbook.tex
-<../images/orderbook_1.png, id=352, 1003.8303pt x 570.933pt>
+<../images/orderbook_1.png, id=377, 1003.8303pt x 570.933pt>
 File: ../images/orderbook_1.png Graphic file (type png)
 <use ../images/orderbook_1.png>
 Package pdftex.def Info: ../images/orderbook_1.png  used on input line 42.
 (pdftex.def)             Requested size: 218.51521pt x 124.28146pt.
-<../images/orderbook_2.png, id=354, 1003.8303pt x 570.933pt>
+<../images/orderbook_2.png, id=379, 1003.8303pt x 570.933pt>
 File: ../images/orderbook_2.png Graphic file (type png)
 <use ../images/orderbook_2.png>
 Package pdftex.def Info: ../images/orderbook_2.png  used on input line 48.
 (pdftex.def)             Requested size: 218.51521pt x 124.28146pt.
  [5]) (sections/02_market_simulator.tex [6 <../images/orderbook_1.png> <../imag
 es/orderbook_2.png>] [7]
-<../images/spread-regimes-garch.png, id=388, 1003.8303pt x 1170.0513pt>
+<../images/spread-regimes-garch.png, id=413, 1003.8303pt x 1170.0513pt>
 File: ../images/spread-regimes-garch.png Graphic file (type png)
 <use ../images/spread-regimes-garch.png>
 Package pdftex.def Info: ../images/spread-regimes-garch.png  used on input line
@@ -519,14 +519,14 @@ Package pdftex.def Info: ../images/spread-regimes-garch.png  used on input line
 )
 (sections/03_quoter.tex [8] [9 <../images/spread-regimes-garch.png>] [10]
 [11]) (sections/04_client_flow.tex [12]
-<../images/client-flow-intensity.png, id=429, 714.7503pt x 281.853pt>
+<../images/client-flow-intensity.png, id=454, 714.7503pt x 281.853pt>
 File: ../images/client-flow-intensity.png Graphic file (type png)
 <use ../images/client-flow-intensity.png>
 Package pdftex.def Info: ../images/client-flow-intensity.png  used on input lin
 e 53.
 (pdftex.def)             Requested size: 341.43307pt x 134.64279pt.
  [13 <../images/client-flow-intensity.png>]
-<../images/client-flow-pareto.png, id=439, 508.7808pt x 281.853pt>
+<../images/client-flow-pareto.png, id=464, 508.7808pt x 281.853pt>
 File: ../images/client-flow-pareto.png Graphic file (type png)
 <use ../images/client-flow-pareto.png>
 Package pdftex.def Info: ../images/client-flow-pareto.png  used on input line 1
@@ -534,27 +534,27 @@ Package pdftex.def Info: ../images/client-flow-pareto.png  used on input line 1
 (pdftex.def)             Requested size: 341.43307pt x 189.15448pt.
 ) (sections/06_pnl_inventory.tex [14 <../images/client-flow-pareto.png>])
 (sections/07_backtest_report.tex [15] [16]
-<../images/phase1-3markets-prices.png, id=467, 1006.7211pt x 1021.1751pt>
+<../images/phase1-3markets-prices.png, id=492, 1006.7211pt x 1021.1751pt>
 File: ../images/phase1-3markets-prices.png Graphic file (type png)
 <use ../images/phase1-3markets-prices.png>
 Package pdftex.def Info: ../images/phase1-3markets-prices.png  used on input li
 ne 76.
 (pdftex.def)             Requested size: 432.48051pt x 438.6916pt.
-<../images/phase1-top10-trades.png, id=470, 1006.7211pt x 500.8311pt>
+<../images/phase1-top10-trades.png, id=495, 1006.7211pt x 500.8311pt>
 File: ../images/phase1-top10-trades.png Graphic file (type png)
 <use ../images/phase1-top10-trades.png>
 Package pdftex.def Info: ../images/phase1-top10-trades.png  used on input line 
 87.
 (pdftex.def)             Requested size: 432.48051pt x 215.15448pt.
  [17]
-<../images/phase1-inventory-vs-price.png, id=481, 1006.7211pt x 356.2911pt>
+<../images/phase1-inventory-vs-price.png, id=506, 1006.7211pt x 356.2911pt>
 File: ../images/phase1-inventory-vs-price.png Graphic file (type png)
 <use ../images/phase1-inventory-vs-price.png>
 Package pdftex.def Info: ../images/phase1-inventory-vs-price.png  used on input
  line 100.
 (pdftex.def)             Requested size: 432.48051pt x 153.06082pt.
  [18 <../images/phase1-3markets-prices.png>]
-<../images/phase1-mtm-percentiles.png, id=489, 1006.7211pt x 356.2911pt>
+<../images/phase1-mtm-percentiles.png, id=514, 1006.7211pt x 356.2911pt>
 File: ../images/phase1-mtm-percentiles.png Graphic file (type png)
 <use ../images/phase1-mtm-percentiles.png>
 Package pdftex.def Info: ../images/phase1-mtm-percentiles.png  used on input li
@@ -660,56 +660,82 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 216.
 
-[24]) (sections/09_phase3_hft.tex [25]) (sections/10_conclusion.tex) (main.bbl
-[26]) [27] (main.aux)
+[24]
+Overfull \hbox (2.6447pt too wide) in paragraph at lines 339--355
+ [][] 
+ []
+
+) (sections/09_phase3_hft.tex [25] [26]
+Overfull \hbox (13.515pt too wide) in paragraph at lines 69--76
+ []\T1/cmr/bx/n/12 Everything else is held fixed.[] \T1/cmr/m/n/12 The back-tes
+t reuses the Phase 2 cal-i-brated \T1/cmtt/m/n/12 QuoterConfig\T1/cmr/m/n/12 ,
+ []
+
+[27]
+Overfull \hbox (15.69124pt too wide) in paragraph at lines 144--165
+\T1/cmr/m/n/12 squeezes. The \T1/cmr/m/it/12 in-cep-tion spread \T1/cmr/m/n/12 
+we still cap-ture (3510 USD over the win-dow, $\OMS/cmsy/m/n/12 ^^Y \OT1/cmr/m/
+n/12 234$ \T1/cmr/m/n/12 USD/day)
+ []
+
+[28]
+<../images/phase3-inventory-vs-price.png, id=586, 1006.7211pt x 356.2911pt>
+File: ../images/phase3-inventory-vs-price.png Graphic file (type png)
+<use ../images/phase3-inventory-vs-price.png>
+Package pdftex.def Info: ../images/phase3-inventory-vs-price.png  used on input
+ line 168.
+(pdftex.def)             Requested size: 432.48051pt x 153.06082pt.
+) (sections/10_conclusion.tex [29 <../images/phase3-inventory-vs-price.png>]) (
+main.bbl [30]) [31] (main.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2025-12-24>
  ***********
 Package rerunfilecheck Info: File `main.out' has not changed.
-(rerunfilecheck)             Checksum: DC59E16EB2CD1FBF349AB2081744251F;11112.
+(rerunfilecheck)             Checksum: 40E78C2AD428753026FEFB996DBE9621;11996.
  ) 
 Here is how much of TeX's memory you used:
- 13380 strings out of 467871
- 213496 string characters out of 5418377
- 635277 words of memory out of 5000000
- 41927 multiletter control sequences out of 15000+600000
- 650698 words of font info for 98 fonts, out of 8000000 for 9000
+ 13417 strings out of 467871
+ 214252 string characters out of 5418377
+ 635917 words of memory out of 5000000
+ 41945 multiletter control sequences out of 15000+600000
+ 651373 words of font info for 99 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,14n,79p,904b,570s stack positions out of 10000i,1000n,20000p,200000b,200000s
- <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\tcrm
+ 75i,14n,79p,904b,566s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\eccc
 1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi60
-0\ecbx1095.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec
-/dpi600\ecrm1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknap
-pen/ec/dpi600\ecbx1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour
-/jknappen/ec/dpi600\ecti1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/
-ljfour/jknappen/ec/dpi600\ectt1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fon
-ts/pk/ljfour/jknappen/ec/dpi600\ecbx1440.pk> <C:\Users\cleme\AppData\Local\MiKT
-eX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm0800.pk> <C:\Users\cleme\AppData\Loca
-l\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1200.pk> <C:\Users\cleme\AppDat
-a\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1200.pk> <C:\Users\cleme\
-AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1728.pk> <C:\Users\
-cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1095.pk> <C:\
-Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1440.pk
-> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx2
-074.pk><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfont
-s/cm/cmex10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/publi
-c/amsfonts/cm/cmmi10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/ty
-pe1/public/amsfonts/cm/cmmi12.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX
-/fonts/type1/public/amsfonts/cm/cmmi6.pfb><C:/Users/cleme/AppData/Local/Program
-s/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi8.pfb><C:/Users/cleme/AppData/Local
-/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr10.pfb><C:/Users/cleme/AppDa
-ta/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr12.pfb><C:/Users/cle
-me/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr6.pfb><C:/Us
-ers/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr7.pfb
-><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/c
-mr8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfon
-ts/cm/cmsy10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/publ
-ic/amsfonts/cm/cmsy8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/ty
-pe1/public/amsfonts/symbols/msbm10.pfb>
-Output written on main.pdf (27 pages, 1392349 bytes).
+0\tcrm1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec
+/dpi600\ecbx1095.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknap
+pen/ec/dpi600\ecrm1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour
+/jknappen/ec/dpi600\ecbx1000.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/
+ljfour/jknappen/ec/dpi600\ecti1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fon
+ts/pk/ljfour/jknappen/ec/dpi600\ectt1200.pk> <C:\Users\cleme\AppData\Local\MiKT
+eX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1440.pk> <C:\Users\cleme\AppData\Loca
+l\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm0800.pk> <C:\Users\cleme\AppDat
+a\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1200.pk> <C:\Users\cleme\
+AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1200.pk> <C:\Users\
+cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecbx1728.pk> <C:\
+Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1095.pk
+> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\ecrm1
+440.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600
+\ecbx2074.pk><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/a
+msfonts/cm/cmex10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1
+/public/amsfonts/cm/cmmi10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fo
+nts/type1/public/amsfonts/cm/cmmi12.pfb><C:/Users/cleme/AppData/Local/Programs/
+MiKTeX/fonts/type1/public/amsfonts/cm/cmmi6.pfb><C:/Users/cleme/AppData/Local/P
+rograms/MiKTeX/fonts/type1/public/amsfonts/cm/cmmi8.pfb><C:/Users/cleme/AppData
+/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr10.pfb><C:/Users/cleme
+/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr12.pfb><C:/Use
+rs/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cmr6.pfb>
+<C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfonts/cm/cm
+r7.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfont
+s/cm/cmr8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/
+amsfonts/cm/cmsy10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type
+1/public/amsfonts/cm/cmsy8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fo
+nts/type1/public/amsfonts/symbols/msbm10.pfb>
+Output written on main.pdf (31 pages, 1503718 bytes).
 PDF statistics:
- 1214 PDF objects out of 1440 (max. 8388607)
- 124 named destinations out of 1000 (max. 500000)
- 510 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 1304 PDF objects out of 1440 (max. 8388607)
+ 142 named destinations out of 1000 (max. 500000)
+ 555 words of extra memory for PDF output out of 10000 (max. 10000000)
 

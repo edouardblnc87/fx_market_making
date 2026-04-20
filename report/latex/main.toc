@@ -61,4 +61,16 @@
 \contentsline {subsection}{\numberline {9.10}Calibrated parameter values}{25}{subsection.9.10}%
 \contentsline {subsection}{\numberline {9.11}Backtest --- Phase~1 vs Phase~2}{25}{subsection.9.11}%
 \contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{26}{section.10}%
-\contentsline {section}{\numberline {11}Conclusion}{26}{section.11}%
+\contentsline {subsection}{\numberline {10.1}Context}{26}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}What we simulate}{27}{subsection.10.2}%
+\contentsline {paragraph}{A latency-advantaged competitor.}{27}{section*.23}%
+\contentsline {paragraph}{A four-state behaviour model.}{27}{section*.24}%
+\contentsline {paragraph}{The realistic monthly schedule.}{27}{section*.25}%
+\contentsline {paragraph}{Everything else is held fixed.}{27}{section*.26}%
+\contentsline {subsection}{\numberline {10.3}Backtest results}{27}{subsection.10.3}%
+\contentsline {subsection}{\numberline {10.4}Analysis}{28}{subsection.10.4}%
+\contentsline {paragraph}{Competition skims the easy flow.}{28}{section*.28}%
+\contentsline {paragraph}{One-sided regimes push inventory, not hedges.}{28}{section*.29}%
+\contentsline {paragraph}{P\&L is path-dependent, but not zero.}{28}{section*.30}%
+\contentsline {subsection}{\numberline {10.5}Implications for Exchange A's customers --- and for our contract}{29}{subsection.10.5}%
+\contentsline {section}{\numberline {11}Conclusion}{30}{section.11}%

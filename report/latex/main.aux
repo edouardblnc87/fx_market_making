@@ -156,6 +156,26 @@
 \@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Heuristic vs calibrated \texttt  {QuoterConfig} parameters. EWMA is selected over GARCH(1,1) on AIC. The expected daily Sharpe computed at the utility optimum is $508$, which is a diagnostic upper bound on a frictionless path rather than a realised backtest figure.}}{25}{table.caption.21}\protected@file@percent }
 \newlabel{tab:p2-calibrated}{{5}{25}{Heuristic vs calibrated \texttt {QuoterConfig} parameters. EWMA is selected over GARCH(1,1) on AIC. The expected daily Sharpe computed at the utility optimum is $508$, which is a diagnostic upper bound on a frictionless path rather than a realised backtest figure}{table.caption.21}{}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {9.11}Backtest --- Phase~1 vs Phase~2}{25}{subsection.9.11}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Phase~1 (heuristic) vs Phase~2 (calibrated) on the same 30-day stock path, and Phase~2 replayed on a fresh 15-day path ($dt = 50$\,ms) with identical client-flow parameters.}}{26}{table.caption.22}\protected@file@percent }
+\newlabel{tab:p1-vs-p2}{{6}{26}{Phase~1 (heuristic) vs Phase~2 (calibrated) on the same 30-day stock path, and Phase~2 replayed on a fresh 15-day path ($dt = 50$\,ms) with identical client-flow parameters}{table.caption.22}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{26}{section.10}\protected@file@percent }
+\newlabel{sec:phase3}{{10}{26}{Phase 3 --- Fallback Liquidity Under HFT Competition}{section.10}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Context}{26}{subsection.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}What we simulate}{27}{subsection.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{A latency-advantaged competitor.}{27}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{A four-state behaviour model.}{27}{section*.24}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{The realistic monthly schedule.}{27}{section*.25}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Everything else is held fixed.}{27}{section*.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Backtest results}{27}{subsection.10.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Phase~2 (calibrated quoter, no competitor) vs Phase~3 (identical path, HFT enabled with the 8-event realistic schedule). Same stock path, same client-flow seed, same \texttt  {QuoterConfig}.}}{28}{table.caption.27}\protected@file@percent }
+\newlabel{tab:p3-vs-p2}{{7}{28}{Phase~2 (calibrated quoter, no competitor) vs Phase~3 (identical path, HFT enabled with the 8-event realistic schedule). Same stock path, same client-flow seed, same \texttt {QuoterConfig}}{table.caption.27}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.4}Analysis}{28}{subsection.10.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Competition skims the easy flow.}{28}{section*.28}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{One-sided regimes push inventory, not hedges.}{28}{section*.29}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{P\&L is path-dependent, but not zero.}{28}{section*.30}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Phase~3 EUR/USD price path alongside MM EUR inventory over the 15-day run (exported from \texttt  {ctrl\_hft.report()} in \texttt  {test/phase2\_calibration.ipynb}). The two sustained inventory swings correspond to the scheduled HFT \textsc  {one-sided-bid} and \textsc  {one-sided-ask} windows; the inventory never reaches the $\pm 90\%$-of-$K/2$ hedge trigger, which is why no hedge legs fire in Phase~3.}}{29}{figure.caption.31}\protected@file@percent }
+\newlabel{fig:p3-inv-vs-price}{{10}{29}{Phase~3 EUR/USD price path alongside MM EUR inventory over the 15-day run (exported from \texttt {ctrl\_hft.report()} in \texttt {test/phase2\_calibration.ipynb}). The two sustained inventory swings correspond to the scheduled HFT \textsc {one-sided-bid} and \textsc {one-sided-ask} windows; the inventory never reaches the $\pm 90\%$-of-$K/2$ hedge trigger, which is why no hedge legs fire in Phase~3}{figure.caption.31}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.5}Implications for Exchange A's customers --- and for our contract}{29}{subsection.10.5}\protected@file@percent }
 \bibstyle{plainnat}
 \bibdata{references}
 \bibcite{aban2006parameter}{{1}{2006}{{Aban et~al.}}{{Aban, Meerschaert, and Panorska}}}
@@ -163,12 +183,8 @@
 \bibcite{biais1995empirical}{{3}{1995}{{Biais et~al.}}{{Biais, Hillion, and Spatt}}}
 \bibcite{bollerslev1986generalized}{{4}{1986}{{Bollerslev}}{{}}}
 \bibcite{carteajaimungal2015algorithmic}{{5}{2015}{{Cartea et~al.}}{{Cartea, Jaimungal, and Penalva}}}
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Phase~1 (heuristic) vs Phase~2 (calibrated) over 30 days, same client-flow seed conditional on phase, same capital and the same venue machinery.}}{26}{table.caption.22}\protected@file@percent }
-\newlabel{tab:p1-vs-p2}{{6}{26}{Phase~1 (heuristic) vs Phase~2 (calibrated) over 30 days, same client-flow seed conditional on phase, same capital and the same venue machinery}{table.caption.22}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {10}Phase 3 --- Fallback Liquidity Under HFT Competition}{26}{section.10}\protected@file@percent }
-\newlabel{sec:phase3}{{10}{26}{Phase 3 --- Fallback Liquidity Under HFT Competition}{section.10}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {11}Conclusion}{26}{section.11}\protected@file@percent }
-\newlabel{sec:conclusion}{{11}{26}{Conclusion}{section.11}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {11}Conclusion}{30}{section.11}\protected@file@percent }
+\newlabel{sec:conclusion}{{11}{30}{Conclusion}{section.11}{}}
 \bibcite{cont2014price}{{6}{2014}{{Cont et~al.}}{{Cont, Kukanov, and Stoikov}}}
 \bibcite{engle2004impacts}{{7}{2004}{{Engle and Patton}}{{}}}
 \bibcite{gabaix2003theory}{{8}{2003}{{Gabaix et~al.}}{{Gabaix, Gopikrishnan, Plerou, and Stanley}}}
@@ -177,4 +193,4 @@
 \bibcite{hostoll1981optimal}{{11}{1981}{{Ho and Stoll}}{{}}}
 \bibcite{riskmetrics1996}{{12}{1996}{{J.P. Morgan/Reuters}}{{}}}
 \bibcite{roll1984simple}{{13}{1984}{{Roll}}{{}}}
-\gdef \@abspage@last{27}
+\gdef \@abspage@last{31}
