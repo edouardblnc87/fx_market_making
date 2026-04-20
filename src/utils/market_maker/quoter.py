@@ -77,7 +77,7 @@ class QuoterConfig:
     # expressed as a fraction of each half independently.
     # e.g. delta_limit=0.90 → hedge fires when |EUR inventory| > 0.90 × (K/2)
     #                        OR |EUR inv × price| (USD notional) > 0.90 × (K/2)
-    delta_limit: float = 0.90
+    delta_limit: float = 0.60
     hedge_partial_limit: float = 0.80
     emergency_penalty_multiplier: float = 5.0
     # EOD flat: force inventory to zero every eod_flat_interval seconds.

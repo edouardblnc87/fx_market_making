@@ -147,7 +147,7 @@ class CalibratedConfigBuilder:
         quoter_cfg = QuoterConfig(
             gamma=gamma_params["gamma"],
             omega=gamma_params["omega"],
-            vol_window_s=vol_params["vol_window"] * dt,
+            vol_window_s=vol_params["vol_window_s"],
             alpha_spread=spread_params["alpha_spread"],
             alpha_imbalance=spread_params["alpha_imbalance"],
             k=k_params["k"],
