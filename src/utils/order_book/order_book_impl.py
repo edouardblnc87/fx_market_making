@@ -46,7 +46,7 @@ class Order:
 
 class Order_book:
 
-    def __init__(self, spread_init: float = 0.1, n_levels: int = 10):
+    def __init__(self, spread_init: float = 0.1, n_levels: int = 10, track_submissions: bool = False):
         self._spread_init   = spread_init
         self.n_levels       = n_levels
 
@@ -66,7 +66,8 @@ class Order_book:
         # Match log: list of dicts, converted to DataFrame on demand.
         self._match_log: list = []
 
-        # Full submission log: every order routed through the book.
+        # Full submission log: every order routed through the book (opt-in).
+        self._track_submissions: bool = track_submissions
         self._submission_log: list = []
 
         # Resting MM registry (unchanged public contract).
@@ -121,8 +122,7 @@ class Order_book:
 
     def tick(self, step: int) -> None:
         self._current_step = step
-        for oid in self._mm_resting:
-            self._mm_resting[oid]["age"] += 1
+        # Age is computed on demand: step - entry["post_step"] (no loop needed)
 
     @property
     def mm_resting_orders(self) -> dict:
@@ -139,23 +139,24 @@ class Order_book:
             "level":     order._level,
             "seq":       self._seq,
         }
-        self._submission_log.append({
-            "OrderId":   order._id,
-            "Step":      self._current_step,
-            "Direction": order._direction,
-            "Price":     order._price,
-            "Size":      order._size,
-            "Origin":    order._origin,
-            "Type":      order._type,
-            "Level":     order._level,
-        })
+        if self._track_submissions:
+            self._submission_log.append({
+                "OrderId":   order._id,
+                "Step":      self._current_step,
+                "Direction": order._direction,
+                "Price":     order._price,
+                "Size":      order._size,
+                "Origin":    order._origin,
+                "Type":      order._type,
+                "Level":     order._level,
+            })
         if order._origin == "market_maker":
             self._orders[order._id] = entry
             self._mm_resting[order._id] = {
                 "price":          order._price,
                 "direction":      order._direction,
                 "level":          order._level,
-                "age":            0,
+                "post_step":      self._current_step,
                 "original_size":  order._size,
                 "remaining_size": order._size,
             }
