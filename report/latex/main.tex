@@ -1,0 +1,86 @@
+\documentclass[12pt,a4paper]{article}
+
+% ── Encoding & fonts ──────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% ── Page layout ───────────────────────────────────────────────────────────────
+\usepackage[top=2.5cm, bottom=2.5cm, left=2.5cm, right=2.5cm]{geometry}
+
+% ── Math ──────────────────────────────────────────────────────────────────────
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% ── Figures & tables ──────────────────────────────────────────────────────────
+\usepackage{graphicx}
+\graphicspath{{../images/}}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{array}
+
+% ── References & links ────────────────────────────────────────────────────────
+\usepackage[colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue]{hyperref}
+\usepackage[numbers,sort&compress]{natbib}
+
+% ── Misc ──────────────────────────────────────────────────────────────────────
+\usepackage{xcolor}
+\usepackage{nicefrac}
+
+% ── Helpers ───────────────────────────────────────────────────────────────────
+% Placeholder box for missing figures
+\newcommand{\figplaceholder}[2]{%
+  \begin{figure}[H]
+    \centering
+    \fcolorbox{gray!60}{gray!10}{\parbox{0.85\textwidth}{\centering\vspace{1.5cm}
+      \textcolor{gray}{\textbf{[Figure placeholder]}\\#1}\vspace{1.5cm}}}
+    \caption{#2}
+  \end{figure}%
+}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\title{\textbf{On Market Making for a New Exchange:\\
+       EUR/USD Designated Market Maker on Exchange A}}
+
+\author{
+  Edouard Blanc \quad Cl\'ement Dardare \quad Julien Simeoni \\[4pt]
+  \small Paris Dauphine University --- MSc 203
+}
+
+\date{April 2026}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ── Sections ──────────────────────────────────────────────────────────────────
+\input{sections/00_introduction}
+\clearpage
+\input{sections/01_orderbook}
+\clearpage
+\input{sections/02_market_simulator}
+\clearpage
+\input{sections/03_quoter}
+\clearpage
+\input{sections/04_client_flow}
+\clearpage
+\input{sections/06_pnl_inventory}
+\clearpage
+\input{sections/07_backtest_report}
+\clearpage
+\input{sections/08_phase2_calibration}
+\clearpage
+\input{sections/09_phase3_hft}
+\clearpage
+\input{sections/10_conclusion}
+
+% ── Bibliography ──────────────────────────────────────────────────────────────
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

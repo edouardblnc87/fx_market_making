@@ -84,11 +84,17 @@ class Order_book:
         combined = {**self._orders, **self._client_orders}
         if not combined:
             return pd.DataFrame(columns=["Id", "Direction", "Price", "Size",
-                                         "Type", "Origin", "Level"])
+                                         "Origin", "Level"])
         rows = [{"Id": oid, **o} for oid, o in combined.items()]
         df = pd.DataFrame(rows).set_index("Id")
-        # remove internal seq column from public view
-        return df.drop(columns=["seq"], errors="ignore")
+        df = df.drop(columns=["seq"], errors="ignore")
+        return df.rename(columns={
+            "direction": "Direction",
+            "price":     "Price",
+            "size":      "Size",
+            "origin":    "Origin",
+            "level":     "Level",
+        })
 
     @property
     def _df_bid_book(self) -> pd.DataFrame:

@@ -1,0 +1,138 @@
+\section{Client Order Flow on Exchange A}
+\label{sec:client-flow}
+
+The quoter of Section~\ref{sec:quoter} sets prices, but the only
+channel through which those prices become realised revenue is the
+stream of client orders reaching Exchange $A$. We therefore need a
+generative model of that flow with three layers: \emph{when} an
+order arrives, \emph{which type} it is, and \emph{how large} it is.
+The intensity baseline $A$, the price sensitivity $k$, the tail
+index $\alpha$ of order sizes and the market-order mix $p_{\mathrm{MO}}$
+are design parameters of the simulator: they are held fixed across
+Phase~1 and Phase~2 and are not re-estimated by the calibration
+pipeline of Section~\ref{sec:phase2}. What Phase~2 recalibrates are
+the quoter's own risk parameters --- the client-flow knobs above
+remain exogenous throughout.
+
+\subsection{Poisson arrivals with price-sensitive intensity}
+\label{sec:client-flow-intensity}
+
+Buy-side and sell-side clients are modelled as two independent
+inhomogeneous Poisson processes whose instantaneous rates depend on
+how far our posted quote sits from the prevailing mid on the
+relevant side. Tightening the ask attracts buy-side flow without
+mechanically also attracting sell-side flow, which matches the
+empirical asymmetry of electronic FX and preserves the separation
+of controls the quoter relies on. With the mid $m_t$ and our
+top-of-book $(\mathrm{bid}_t, \mathrm{ask}_t)$, the per-side
+distances in basis points are
+\[
+  \delta^{\mathrm{ask}}_t = 10^{4}\,\frac{\mathrm{ask}_t - m_t}{m_t},
+  \qquad
+  \delta^{\mathrm{bid}}_t = 10^{4}\,\frac{m_t - \mathrm{bid}_t}{m_t},
+\]
+and the arrival intensities take the exponential kernel of
+\citet{avellaneda2008high},
+\[
+  \lambda^{\mathrm{buy}}_t \;=\; A\,\exp\!\bigl(-k\,\delta^{\mathrm{ask}}_t\bigr),
+  \qquad
+  \lambda^{\mathrm{sell}}_t \;=\; A\,\exp\!\bigl(-k\,\delta^{\mathrm{bid}}_t\bigr).
+\]
+Over a simulation step of length $\Delta t$ the number of arrivals
+on each side is drawn independently as
+$N^{\mathrm{side}} \sim \mathrm{Poisson}(\lambda^{\mathrm{side}}_t \cdot \Delta t)$,
+so a step can produce zero, one, or several orders per side. With
+the defaults $A = 7\cdot 10^{-3}\,\mathrm{s}^{-1}$ and
+$k = 0.3\,\mathrm{bp}^{-1}$, the half-life of the intensity is
+$\ln(2)/k \approx 2.3\,\mathrm{bp}$: a quote posted two bps outside
+the fair mid already attracts roughly half the arrivals that a
+touch-priced quote would.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{client-flow-intensity.png}
+  \caption{Arrival intensity $\lambda(\delta) = A\,e^{-k\delta}$ as a
+           function of the distance from the fair mid, with
+           $A = 0.007\,\mathrm{s}^{-1}$ and $k = 0.3\,\mathrm{bp}^{-1}$.
+           Each bp of extra distance costs the quote approximately
+           $26\%$ of its arrival rate.}
+  \label{fig:client-flow-intensity}
+\end{figure}
+
+\subsection{Market-versus-limit mix and limit placement}
+\label{sec:client-flow-motype}
+
+Each arrival is independently classified market or limit by a
+Bernoulli trial with probability $p_{\mathrm{MO}} = 0.5$. Market
+orders cross immediately at the touch --- buys at $\mathrm{ask}_t$,
+sells at $\mathrm{bid}_t$ --- and are the mechanism through which
+the quoter earns its inception spread. Limit orders rest inside the
+book at a random offset from the mid,
+\[
+  p^{\mathrm{LO,\,buy}} \;=\; m_t\,\Bigl(1 - \tfrac{\varepsilon}{10^{4}}\Bigr),
+  \qquad
+  p^{\mathrm{LO,\,sell}} \;=\; m_t\,\Bigl(1 + \tfrac{\varepsilon}{10^{4}}\Bigr),
+  \qquad
+  \varepsilon \sim \mathrm{Exp}(k).
+\]
+Using the same $k$ in both the arrival intensity and the
+limit-placement distribution is a self-consistency choice rather
+than a fit: clients who are dissuaded from crossing at rate $k$ are
+assumed to post passively at the same rate $k$. This keeps the
+flow symmetric under a shift of the quoted distance --- widening our
+spread by $\Delta\delta$ reduces arrivals by $e^{-k\Delta\delta}$
+and simultaneously pushes the average passive limit deeper by the
+same factor, with no second free parameter to tune.
+
+\subsection{Heavy-tailed order sizes}
+\label{sec:client-flow-size}
+
+Client notional sizes are drawn from a truncated Pareto on the
+interval $[x_{\min}, x_{\max}] = [10^{3}, 10^{5}]\,\mathrm{EUR}$
+with tail index $\alpha = 1.5$, in line with the power-law volume
+distribution of \citet{gabaix2003theory}. Truncation is not only
+empirical realism --- the exchange rejects orders outside its
+permitted notional band --- but also a numerical safeguard: an
+untruncated Pareto with $\alpha = 1.5$ has infinite variance, and
+Monte-Carlo P\&L moments would be dominated by a handful of
+outliers instead of by the structural behaviour of the quoter. The
+truncated inverse-CDF sampler is
+\[
+  X \;=\; x_{\min}\,\Bigl(1 - U\bigl(1 - (x_{\min}/x_{\max})^{\alpha}\bigr)\Bigr)^{-1/\alpha},
+  \qquad U \sim \mathcal{U}(0,1),
+\]
+which respects the bounds exactly without rejection sampling. The
+resulting distribution concentrates mass near $x_{\min}$ but
+assigns a non-trivial weight to the largest permitted ticket, so a
+typical session mixes many small fills with a few that can move
+the inventory by several percent of capital in a single trade.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{client-flow-pareto.png}
+  \caption{Truncated Pareto size distribution on
+           $[10^{3}, 10^{5}]$~EUR with $\alpha = 1.5$: mass
+           concentrates near the lower bound while the heavy tail
+           keeps a non-trivial weight at the hard cap $x_{\max}$.}
+  \label{fig:client-flow-pareto}
+\end{figure}
+
+\subsection{Consumption by the order book}
+\label{sec:client-flow-consumption}
+
+Each generated order is tagged with $\mathrm{origin} = \texttt{client}$
+and pushed into the same matching engine that ingests our own
+quotes (Section~\ref{sec:orderbook}). A client market buy walks the
+ask ladder level by level under price--time priority, partially
+filling our resting quotes until its size is exhausted; a client
+limit order either crosses and generates an immediate fill at the
+touch we posted or rests in the book, where it remains eligible to
+be matched against a future quote. The matching rule restricts
+trades to client-versus-market-maker pairs, so client-to-client
+crossings never occur and the realised fill price is always our
+passive quote. This closed loop --- client intensity shaped by our
+quote, fills generated only through our ladder --- is precisely the
+structure assumed by the Avellaneda--Stoikov and \citet{gueant2013dealing}
+half-spread derivations, and it makes the intensity baseline $A$
+and decay $k$ the two knobs that jointly control fill rate and
+adverse-selection severity alongside our posted half-spread $h_t$.
