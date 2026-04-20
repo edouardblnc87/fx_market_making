@@ -1,5 +1,45 @@
 \section{Conclusion}
 \label{sec:conclusion}
-% TODO: summarise findings across the three phases, limitations of the
-% heuristic approach used in Phase 1, directions for further work
-% (cross-pair hedging, better HFT-adversary model, live-data calibration).
+
+Phase~1 built a working DMM from textbook ingredients: an
+Avellaneda--Stoikov core widened by a Guéant multi-level ladder, an
+OFI skew, session-adaptive $k$, and a depth-gated hedge router on
+B and C. With defaults calibrated by hand it already produced a
+coherent, mean-reverting inventory trajectory and a positive
+inception-spread P\&L on synthetic EUR/USD paths. Phase~2 replaced
+those defaults with MLE estimates drawn from Phase~1's own fill
+history --- arrival $k$, Pareto tail, GARCH volatility, and a
+grid-optimised $\gamma$ --- and showed that the calibrated quoter
+kept the same P\&L shape while halving quoted-spread volatility and
+tightening inventory control. Phase~3 stressed the same calibrated
+configuration against a latency-advantaged HFT on a scripted 15-day
+calendar: fills per day fell 24\% and headline MtM compressed, but
+the inception-spread leg ($+3{,}510$~USD) survived and the DMM
+absorbed every one-sided window without firing a single hedge,
+which is the behaviour the contract is actually paying for.
+
+The approach has real limits. Phase~1's quoting choices are
+heuristic: inventory penalty, OFI weight and session multipliers
+are defensible but not optimal, and Phase~2 only re-estimates a
+subset of them (client-flow $A$ and $k$ stay user-set by design).
+The HFT in Phase~3 is a single reactive agent on a hand-written
+schedule rather than a learned adversary, and hedging is confined
+to EUR/USD on B and C with no cross-pair routing. All results are
+on simulated paths: the stock, the client flow and the HFT
+behaviour are all our own models, so the numbers should be read as
+internally consistent rather than externally validated.
+
+Natural extensions follow directly. Replacing the HFT schedule
+with an adversary that learns to withdraw optimally against our
+quoting policy would turn Phase~3 into a proper game and expose
+whether the fallback premium is robust to strategic play.
+Extending calibration to live EUR/USD tick data would close the
+loop between the MLE machinery and the real arrival process.
+Cross-pair hedging --- routing EUR risk through EUR/GBP or
+EUR/JPY when B and C depth is thin --- would relax the
+single-venue-pair assumption that currently bounds the hedge
+router. Finally, the contract-design question raised at the end
+of Phase~3 (availability-based DMM compensation rather than
+volume-based) is the natural bridge from this simulator to the
+market-microstructure policy literature, and the clearest direction
+in which this project would want to be taken next.

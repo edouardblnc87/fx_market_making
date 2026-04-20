@@ -319,6 +319,13 @@ INPUT .\sections\09_phase3_hft.tex
 INPUT .\sections\09_phase3_hft.tex
 INPUT .\sections\09_phase3_hft.tex
 INPUT sections\09_phase3_hft.tex
+INPUT C:\Users\cleme\AppData\Local\Programs\MiKTeX\fonts\tfm\jknappen\ec\eccc1200.tfm
+INPUT ..\images\phase3-inventory-vs-price.png
+INPUT ..\images\phase3-inventory-vs-price.png
+INPUT ..\images\phase3-inventory-vs-price.png
+INPUT ..\images\phase3-inventory-vs-price.png
+INPUT ..\images\phase3-inventory-vs-price.png
+INPUT ..\images\phase3-inventory-vs-price.png
 INPUT .\sections\10_conclusion.tex
 INPUT .\sections\10_conclusion.tex
 INPUT .\sections\10_conclusion.tex
@@ -330,6 +337,8 @@ INPUT main.bbl
 INPUT main.aux
 INPUT .\main.out
 INPUT .\main.out
+INPUT C:\Users\cleme\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\eccc1200.pk
+INPUT C:\Users\cleme\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\eccc1200.pk
 INPUT C:\Users\cleme\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\tcrm1200.pk
 INPUT C:\Users\cleme\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\tcrm1200.pk
 INPUT C:\Users\cleme\AppData\Local\MiKTeX\fonts\pk\ljfour\jknappen\ec\dpi600\ecbx1095.pk

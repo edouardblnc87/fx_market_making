@@ -1,13 +1,13 @@
 # Fdb version 4
-["bibtex main"] 1776721032.28728 "main.aux" "main.bbl" "main" 1776721035.0454 0
+["bibtex main"] 1776724583.82516 "main.aux" "main.bbl" "main" 1776724587.99723 0
   "./references.bib" 1776715779.59113 4023 6317d15259491d2c1f4f97b46ab60f9a ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/bibtex/bst/natbib/plainnat.bst" 1284455456 26816 ffe5423d2019860bad9f54bc402fac15 ""
-  "main.aux" 1776721034.17415 20353 ef37f9257224d880498d9b6893edccc4 "pdflatex"
+  "main.aux" 1776724586.73803 23462 341a2a7737dbfe20f95fbf979186899f "pdflatex"
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1776721032.54636 "main.tex" "main.pdf" "main" 1776721035.04615 0
+["pdflatex"] 1776724584.34762 "main.tex" "main.pdf" "main" 1776724587.99808 0
   "../images/client-flow-intensity.png" 1776702220.26968 35912 ce1f8215d3105c8f3745c501b04b5fd2 ""
   "../images/client-flow-pareto.png" 1776702312.43923 25637 4c8e5d4cd35dd3ae98f7c62108d7a298 ""
   "../images/orderbook_1.png" 1776689353.43146 62701 093d8dcb6051eccf14730c017030bac6 ""
@@ -16,6 +16,7 @@
   "../images/phase1-inventory-vs-price.png" 1776706086.47985 135639 e52a1aa4981001068e5bbcb0411f0c90 ""
   "../images/phase1-mtm-percentiles.png" 1776706086.49938 62098 161721eeca30a7d79a843e4556dcad38 ""
   "../images/phase1-top10-trades.png" 1776706086.46083 79019 bcd6ad06d59b63483cea0269a568e6c3 ""
+  "../images/phase3-inventory-vs-price.png" 1776724375.96125 102245 eed22eadd0adf725481ff7a7b72f7151 ""
   "../images/spread-regimes-garch.png" 1776698716.03072 398763 f4d9307bb30f4f9d3c282d28ee512804 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map" 1776677354.75836 81088 29d6fa367ac022d1b69251d68c0742e6 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecbx1000.pk" 1776697030.66379 25420 0c1394d8846720cfd83fdeb04c6b6a72 ""
@@ -24,6 +25,7 @@
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecbx1440.pk" 1774795875.32408 40136 6c4f996c9a73f5a2084ba2d135d320aa ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecbx1728.pk" 1774795876.84879 49100 c3c147aa69ff670ba3dad144675e13b2 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecbx2074.pk" 1774795882.03748 59008 38b328e47df3de426970455b3c0b2088 ""
+  "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/eccc1200.pk" 1776724404.50087 30576 98f38b092ed1362526c161a5b4e9e964 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecrm0800.pk" 1774795939.88267 19080 2c116328b84c66f48fb80e1c5b0707be ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecrm1000.pk" 1774861111.86331 23808 a97f36bdb380e0882132bed960b4d802 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecrm1095.pk" 1774795879.3437 26228 de30e7396e7a74657642d9f27aad84db ""
@@ -40,6 +42,7 @@
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/tfm/jknappen/ec/ecbx1440.tfm" 993061960 3196 0b37fa3083e15c57cfa8c4ff52f2807a ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/tfm/jknappen/ec/ecbx1728.tfm" 993061962 3204 d35cb76836b6cb4ed404dd64a550530d ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/tfm/jknappen/ec/ecbx2074.tfm" 993061964 3208 da5ec29ca7c2f5f55c296dd6713d4a74 ""
+  "C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/tfm/jknappen/ec/eccc1200.tfm" 993061984 2796 601f0e3324021d7edb90718e24047a6a ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/tfm/jknappen/ec/ecrm0600.tfm" 993062116 3160 116e21835795bb29209ae8bb4682382f ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/tfm/jknappen/ec/ecrm0800.tfm" 993062118 3152 11ecf5aad6aacf00ff18f394ab23a8b5 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/tfm/jknappen/ec/ecrm1000.tfm" 993062122 3148 7e594c8240c71e432203f65ab5f95a51 ""
@@ -148,11 +151,11 @@
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/units/nicefrac.sty" 1469029150 4163 98f285ced1c61c25144faeaf509fbad0 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/url/url.sty" 1388490452 12796 8edb7d69a20b857904dd0ea757c14ec9 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/xcolor/xcolor.sty" 1729265222 55384 b454dec21c2d9f45ec0b793f0995b992 ""
-  "main.aux" 1776721034.17415 20353 ef37f9257224d880498d9b6893edccc4 "pdflatex"
-  "main.bbl" 1776721032.48709 3782 5f27101de73c43abf62b3a8193a51712 "bibtex main"
-  "main.out" 1776721034.18405 11112 dc59e16eb2cd1fbf349ab2081744251f "pdflatex"
+  "main.aux" 1776724586.73803 23462 341a2a7737dbfe20f95fbf979186899f "pdflatex"
+  "main.bbl" 1776724584.26242 3782 5f27101de73c43abf62b3a8193a51712 "bibtex main"
+  "main.out" 1776724586.76394 11996 40e78c2ad428753026fefb996dbe9621 "pdflatex"
   "main.tex" 1776721017.73008 3965 f8876291c319fca50d04eece0d8d090c ""
-  "main.toc" 1776721034.19106 5723 c01b5dc1705f5639be7b008379ce893c "pdflatex"
+  "main.toc" 1776724586.78221 6737 0a643155562bacebb1153848f736b28d "pdflatex"
   "sections/00_introduction.tex" 1776715453.75029 5394 5e75999df0f5d107669dba2c0924cf65 ""
   "sections/00b_literature_review.tex" 1776715808.3918 3554 8bbfe084863a5298f34e3e88e6e69f20 ""
   "sections/01_orderbook.tex" 1776691275.36725 3772 dfc1ca4094c1f37e16b3eb268b357850 ""
@@ -161,9 +164,9 @@
   "sections/04_client_flow.tex" 1776702351.43837 6722 b8ec170aa1e7e8a766e642924dcba396 ""
   "sections/06_pnl_inventory.tex" 1776701150.07076 3991 045b45bccc572467308e2b492e85af9a ""
   "sections/07_backtest_report.tex" 1776707870.97506 11290 f23d9a17d09dd83da9f49ccc233f3252 ""
-  "sections/08_phase2_calibration.tex" 1776720309.69906 18465 e71e7099e82e6ec68700dd345349315a ""
-  "sections/09_phase3_hft.tex" 1776677265.94266 332 01c7f83f80375ae9935b24a59a7d3261 ""
-  "sections/10_conclusion.tex" 1776677435.87882 256 0501d2dade9646cda219b28ff2f357a1 ""
+  "sections/08_phase2_calibration.tex" 1776723639.21805 19111 bb59a0af646a13f48f05285792927dd6 ""
+  "sections/09_phase3_hft.tex" 1776724266.96767 10588 2f91821e38e58731467bdd7b06cc36cf ""
+  "sections/10_conclusion.tex" 1776724513.69101 2568 d20896644b55dcac1cd34f976c75702b ""
   (generated)
   "main.aux"
   "main.log"
