@@ -275,43 +275,103 @@ backtest is launched with exactly the same simulation machinery as
 Phase~1 --- fresh stock and market paths, identical client-flow
 parameters --- with only the quoting configuration having changed.
 
-\subsection{From heuristic defaults to calibrated values}
+\subsection{Calibrated parameter values}
 
-Running the pipeline on the 30-day Phase~1 backtest produces the
-calibrated values shown in Table~\ref{tab:p2-calibrated}. Each entry
-is the output of one of the procedures described above; the next
-subsection interprets the direction and magnitude of each change.
+Running the pipeline on the 30-day Phase~1 run produces the values
+shown in Table~\ref{tab:p2-calibrated}. The movements relative to the
+heuristic defaults are informative in their own right.
 
 \begin{table}[ht]
 \centering
-\small
 \begin{tabular}{lrr}
 \toprule
-Parameter & Phase 1 (heuristic) & Phase 2 (calibrated) \\
+Parameter & Heuristic default & Calibrated \\
 \midrule
-Risk aversion $\gamma$                    & 0.100        & 0.0081     \\
-Discount rate $\omega$ (s$^{-1}$)         & $3.47\!\times\!10^{-5}$ & $1.16\!\times\!10^{-5}$ \\
-Volatility window (s)                     & 60           & 5          \\
-Inventory spread weight $\alpha_{\text{spread}}$  & 0.500 & 5.00       \\
-OFI weight $\alpha_{\text{imb}}$          & $2\!\times\!10^{-4}$ & $1.41\!\times\!10^{-5}$ \\
-Arrival decay $k$ (bp$^{-1}$)             & 0.30         & 0.30       \\
-Base quoted size $Q_{\text{base}}$ (EUR)  & 70\,000      & 7\,370     \\
-Ladder decay $\beta$                      & 0.30         & 1.00       \\
-Staleness threshold stale\_s (s)          & 10           & 60         \\
-Target sweep-through rate                 & n/a          & 0.05       \\
-Recommended vol model                     & --           & EWMA       \\
+$\gamma$                      & $0.10$        & $0.0080$ \\
+$\omega$                      & $3.47\!\times\!10^{-5}$ & $1.16\!\times\!10^{-5}$ \\
+vol\_window\_s                & $60$          & $25$ \\
+$\alpha_{\text{spread}}$      & $0.5$         & $5.0$ \\
+$\alpha_{\text{imb}}$         & $2.0\!\times\!10^{-4}$ & $1.64\!\times\!10^{-5}$ \\
+$k$                           & $0.30$        & $0.30$ \\
+$\beta$                       & $0.30$        & $1.00$ \\
+$Q_{\text{base}}$ (EUR)       & $70{,}000$    & $7{,}368$ \\
+stale\_s                      & $10$          & $60$ \\
 \bottomrule
 \end{tabular}
-\caption{Heuristic defaults (Phase~1) versus values produced by the
-calibration pipeline (Phase~2). Client-flow parameters
-$A_{\text{buy}}, A_{\text{sell}}, k_{\text{buy}}, k_{\text{sell}},
-\alpha, x_{\min}, x_{\max}$ are exogenous and held fixed across
-both phases.}
+\caption{Heuristic vs calibrated \texttt{QuoterConfig} parameters.
+EWMA is selected over GARCH(1,1) on AIC. The expected daily Sharpe
+computed at the utility optimum is $508$, which is a diagnostic upper
+bound on a frictionless path rather than a realised backtest figure.}
 \label{tab:p2-calibrated}
 \end{table}
 
-The next subsection turns to the analysis of the Phase~2 backtest:
-how the calibrated quoter behaves relative to Phase~1, whether the
-directional risk-taking implied by the tighter $\gamma$ is rewarded,
-and how the ladder-utilisation and hedging-frequency diagnostics
-shift under the new configuration.
+Three movements dominate. First, $\gamma$ drops by more than an order
+of magnitude: the heuristic penalty was far too aggressive given the
+realised mid-price volatility on venue~B, and the optimiser flattens
+the inventory-variance term until expected spread capture dominates.
+Second, $Q_{\text{base}}$ collapses from 70\,000~EUR to roughly
+7\,400~EUR because the Pareto inversion with a 5\% sweep target
+simply does not support the original level-1 size. Third,
+$\alpha_{\text{spread}}$ climbs from $0.5$ to the clipping boundary
+at $5.0$: the regression detects a large inventory-widening effect
+in the effective-spread distribution of Phase~1 fills, which the
+hand-picked default had under-weighted. The arrival decay $k$ is
+unchanged at $0.30$ because the buy/sell log-regressions recover
+essentially the same slope the heuristic assumed --- a welcome
+confirmation that the shape of the client-demand curve was already
+well-specified. EWMA is preferred over GARCH(1,1) on AIC, consistent
+with the earlier remark that at 100\,ms step size the GARCH
+persistence does not earn back its two extra parameters.
+
+\subsection{Backtest --- Phase~1 vs Phase~2}
+
+The Phase~2 configuration is then re-run on a fresh 30-day stock path
+(different random seed) with identical client-flow parameters.
+Table~\ref{tab:p1-vs-p2} reports the headline decomposition side by
+side.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lrr}
+\toprule
+Metric & Phase~1 & Phase~2 \\
+\midrule
+Total MtM P\&L (USD)         & $786.92$      & $48.27$ \\
+Realised P\&L (USD)          & $184{,}933.94$ & $61{,}719.45$ \\
+Unrealised P\&L (USD)        & $-184{,}147.02$ & $-61{,}671.18$ \\
+Inception-spread P\&L (USD)  & $296.63$      & $313.82$ \\
+Total fees (USD)             & $142.69$      & $98.97$ \\
+MM fills                     & $479$         & $773$ \\
+Hedge legs                   & $0$           & $0$ \\
+Final inventory (EUR)        & $-167{,}850$  & $-56{,}145$ \\
+\bottomrule
+\end{tabular}
+\caption{Phase~1 (heuristic) vs Phase~2 (calibrated) over 30 days,
+same client-flow seed conditional on phase, same capital and the same
+venue machinery.}
+\label{tab:p1-vs-p2}
+\end{table}
+
+Three observations stand out. First, the calibrated quoter posts
+\emph{more} fills --- 773 vs 479 --- despite the smaller
+$Q_{\text{base}}$, because the tighter half-spread implied by the
+lower $\gamma$ and the refined OFI skew brings quotes closer to the
+fair mid, so more client orders cross them. The extra flow is on
+smaller tickets but at better prices on average, which is why fees
+fall absolutely (98.97 vs 142.69~USD) even as fill count rises.
+Second, final inventory is cut by roughly a factor of three
+($-56\,145$ vs $-167\,850$~EUR). With no hedge legs firing in either
+run --- the paths never breached the hedge trigger --- the
+improvement is entirely a product of better two-sided balance from
+$\alpha_{\text{spread}}$ and $\alpha_{\text{imb}}$ rather than more
+aggressive risk offload. Third, total MtM P\&L drops from
+$787$~USD to $48$~USD, which looks at first like a regression.
+The breakdown makes clear that it is not: both realised
+and unrealised components shrink by the same factor, which is a
+property of the smaller inventory carried at each instant. The
+\emph{inception-spread} P\&L --- the quantity that isolates the
+quality of our quoting net of path-dependent drift --- actually rises
+modestly (from $296.63$ to $313.82$~USD). Read together, Phase~2
+earns a comparable spread by passing through roughly 60\% more fills
+on a third of the inventory risk, which is the direction the
+calibration was aiming at.

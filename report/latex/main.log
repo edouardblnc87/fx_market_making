@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.3.9)  20 APR 2026 22:10
+This is pdfTeX, Version 3.141592653-2.6-1.40.28 (MiKTeX 25.12) (preloaded format=pdflatex 2026.3.9)  20 APR 2026 23:37
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -496,87 +496,73 @@ File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 \tf@toc=\write4
 \openout4 = `main.toc'.
 
-[2] (sections/00_introduction.tex [3]) [4] (sections/00b_literature_review.tex)
-[5
-
-] (sections/01_orderbook.tex
-<../images/orderbook_1.png, id=357, 1003.8303pt x 570.933pt>
+[2] (sections/00_introduction.tex [3]) (sections/00b_literature_review.tex
+[4]) (sections/01_orderbook.tex
+<../images/orderbook_1.png, id=352, 1003.8303pt x 570.933pt>
 File: ../images/orderbook_1.png Graphic file (type png)
 <use ../images/orderbook_1.png>
 Package pdftex.def Info: ../images/orderbook_1.png  used on input line 42.
 (pdftex.def)             Requested size: 218.51521pt x 124.28146pt.
-<../images/orderbook_2.png, id=359, 1003.8303pt x 570.933pt>
+<../images/orderbook_2.png, id=354, 1003.8303pt x 570.933pt>
 File: ../images/orderbook_2.png Graphic file (type png)
 <use ../images/orderbook_2.png>
 Package pdftex.def Info: ../images/orderbook_2.png  used on input line 48.
 (pdftex.def)             Requested size: 218.51521pt x 124.28146pt.
- [6
-
- <../images/orderbook_1.png> <../images/orderbook_2.png>]) [7] (sections/02_mar
-ket_simulator.tex [8
-
-]
-<../images/spread-regimes-garch.png, id=386, 1003.8303pt x 1170.0513pt>
+ [5]) (sections/02_market_simulator.tex [6 <../images/orderbook_1.png> <../imag
+es/orderbook_2.png>] [7]
+<../images/spread-regimes-garch.png, id=388, 1003.8303pt x 1170.0513pt>
 File: ../images/spread-regimes-garch.png Graphic file (type png)
 <use ../images/spread-regimes-garch.png>
 Package pdftex.def Info: ../images/spread-regimes-garch.png  used on input line
  128.
 (pdftex.def)             Requested size: 386.96027pt x 451.03352pt.
-) [9] [10 <../images/spread-regimes-garch.png>] (sections/03_quoter.tex [11
-
-] [12]) [13]
-(sections/04_client_flow.tex
+)
+(sections/03_quoter.tex [8] [9 <../images/spread-regimes-garch.png>] [10]
+[11]) (sections/04_client_flow.tex [12]
 <../images/client-flow-intensity.png, id=429, 714.7503pt x 281.853pt>
 File: ../images/client-flow-intensity.png Graphic file (type png)
 <use ../images/client-flow-intensity.png>
 Package pdftex.def Info: ../images/client-flow-intensity.png  used on input lin
 e 53.
 (pdftex.def)             Requested size: 341.43307pt x 134.64279pt.
- [14
-
- <../images/client-flow-intensity.png>]
-<../images/client-flow-pareto.png, id=437, 508.7808pt x 281.853pt>
+ [13 <../images/client-flow-intensity.png>]
+<../images/client-flow-pareto.png, id=439, 508.7808pt x 281.853pt>
 File: ../images/client-flow-pareto.png Graphic file (type png)
 <use ../images/client-flow-pareto.png>
 Package pdftex.def Info: ../images/client-flow-pareto.png  used on input line 1
 12.
 (pdftex.def)             Requested size: 341.43307pt x 189.15448pt.
-)
-[15 <../images/client-flow-pareto.png>] [16] (sections/06_pnl_inventory.tex)
-[17
-
-] [18] (sections/07_backtest_report.tex [19
-
-]
-<../images/phase1-3markets-prices.png, id=475, 1006.7211pt x 1021.1751pt>
+) (sections/06_pnl_inventory.tex [14 <../images/client-flow-pareto.png>])
+(sections/07_backtest_report.tex [15] [16]
+<../images/phase1-3markets-prices.png, id=467, 1006.7211pt x 1021.1751pt>
 File: ../images/phase1-3markets-prices.png Graphic file (type png)
 <use ../images/phase1-3markets-prices.png>
 Package pdftex.def Info: ../images/phase1-3markets-prices.png  used on input li
 ne 76.
 (pdftex.def)             Requested size: 432.48051pt x 438.6916pt.
-<../images/phase1-top10-trades.png, id=478, 1006.7211pt x 500.8311pt>
+<../images/phase1-top10-trades.png, id=470, 1006.7211pt x 500.8311pt>
 File: ../images/phase1-top10-trades.png Graphic file (type png)
 <use ../images/phase1-top10-trades.png>
 Package pdftex.def Info: ../images/phase1-top10-trades.png  used on input line 
 87.
 (pdftex.def)             Requested size: 432.48051pt x 215.15448pt.
- [20]
-<../images/phase1-inventory-vs-price.png, id=489, 1006.7211pt x 356.2911pt>
+ [17]
+<../images/phase1-inventory-vs-price.png, id=481, 1006.7211pt x 356.2911pt>
 File: ../images/phase1-inventory-vs-price.png Graphic file (type png)
 <use ../images/phase1-inventory-vs-price.png>
 Package pdftex.def Info: ../images/phase1-inventory-vs-price.png  used on input
  line 100.
 (pdftex.def)             Requested size: 432.48051pt x 153.06082pt.
- [21 <../images/phase1-3markets-prices.png>]
-<../images/phase1-mtm-percentiles.png, id=497, 1006.7211pt x 356.2911pt>
+ [18 <../images/phase1-3markets-prices.png>]
+<../images/phase1-mtm-percentiles.png, id=489, 1006.7211pt x 356.2911pt>
 File: ../images/phase1-mtm-percentiles.png Graphic file (type png)
 <use ../images/phase1-mtm-percentiles.png>
 Package pdftex.def Info: ../images/phase1-mtm-percentiles.png  used on input li
 ne 113.
 (pdftex.def)             Requested size: 432.48051pt x 153.06082pt.
- [22 <../images/phase1-top10-trades.png> <../images/phase1-inventory-vs-price.p
-ng>]) [23 <../images/phase1-mtm-percentiles.png>] [24]
-(sections/08_phase2_calibration.tex
+ [19 <../images/phase1-top10-trades.png> <../images/phase1-inventory-vs-price.p
+ng>]) (sections/08_phase2_calibration.tex [20 <../images/phase1-mtm-percentiles
+.png>]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 53.
@@ -585,9 +571,7 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 53.
 
-[25
-
-]
+[21]
 Overfull \hbox (39.77667pt too wide) in paragraph at lines 79--82
 \T1/cmr/m/n/12 The quoter uses an exponentially-weighted es-ti-ma-tor of re-ali
 sed vari-ance with span \T1/cmtt/m/n/12 vol_window_s\T1/cmr/m/n/12 .
@@ -626,7 +610,7 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 120.
 
-[26]
+[22]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 173.
@@ -651,6 +635,7 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 173.
 
+[23]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 216.
@@ -675,27 +660,23 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 (hyperref)                removing `math shift' on input line 216.
 
-[27]) [28] [29] (sections/09_phase3_hft.tex) [30
-
-] (sections/10_conclusion.tex)
-(main.bbl) [31
-
-] (main.aux)
+[24]) (sections/09_phase3_hft.tex [25]) (sections/10_conclusion.tex) (main.bbl
+[26]) [27] (main.aux)
  ***********
 LaTeX2e <2025-11-01>
 L3 programming layer <2025-12-24>
  ***********
 Package rerunfilecheck Info: File `main.out' has not changed.
-(rerunfilecheck)             Checksum: C0CA40B8D3590D8C7B9471C9BE3F3E1D;10981.
+(rerunfilecheck)             Checksum: DC59E16EB2CD1FBF349AB2081744251F;11112.
  ) 
 Here is how much of TeX's memory you used:
  13380 strings out of 467871
- 213462 string characters out of 5418377
- 635078 words of memory out of 5000000
- 41925 multiletter control sequences out of 15000+600000
+ 213496 string characters out of 5418377
+ 635277 words of memory out of 5000000
+ 41927 multiletter control sequences out of 15000+600000
  650698 words of font info for 98 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 75i,14n,79p,904b,547s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 75i,14n,79p,904b,570s stack positions out of 10000i,1000n,20000p,200000b,200000s
  <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi600\tcrm
 1200.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec/dpi60
 0\ecbx1095.pk> <C:\Users\cleme\AppData\Local\MiKTeX\fonts/pk/ljfour/jknappen/ec
@@ -726,9 +707,9 @@ mr8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/public/amsfon
 ts/cm/cmsy10.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/type1/publ
 ic/amsfonts/cm/cmsy8.pfb><C:/Users/cleme/AppData/Local/Programs/MiKTeX/fonts/ty
 pe1/public/amsfonts/symbols/msbm10.pfb>
-Output written on main.pdf (31 pages, 1391980 bytes).
+Output written on main.pdf (27 pages, 1392349 bytes).
 PDF statistics:
- 1224 PDF objects out of 1440 (max. 8388607)
- 126 named destinations out of 1000 (max. 500000)
- 502 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 1214 PDF objects out of 1440 (max. 8388607)
+ 124 named destinations out of 1000 (max. 500000)
+ 510 words of extra memory for PDF output out of 10000 (max. 10000000)
 
