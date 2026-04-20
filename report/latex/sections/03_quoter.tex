@@ -1,0 +1,199 @@
+\section{Market-Making Logic on Exchange A}
+\label{sec:quoter}
+
+Exchange $A$ has no history, so every quote we post is derived
+from the state of $B$, $C$, our inventory $q$, and our capital $K$.
+Given these inputs the quoter must output two things each step: the
+set of orders to post and the set of resting orders to cancel. We
+describe here the modelling decisions that produce those two lists,
+not the Python that assembles them. The six subsections follow the
+order in which the decisions are composed: read the reference price,
+compute a reservation price, widen a spread around it, skew
+asymmetrically and lay down a ladder, decide whether to re-quote at
+all, and finally hedge when inventory breaches its limit.
+
+\subsection{Fair mid under latency asymmetry}
+\label{sec:quoter-mid}
+
+We never quote against $A$'s own mid: $A$ has no informative price
+until we seed one. The reference is instead a cross-venue best
+constructed from $B$ and $C$ read with their respective latency
+offsets $\ell_B = 200\,\mathrm{ms}$ and $\ell_C = 170\,\mathrm{ms}$,
+\[
+  \mathrm{bid}^{\mathrm{fair}}_t = \max\!\bigl(\mathrm{bid}_B(t{-}\ell_B),\ \mathrm{bid}_C(t{-}\ell_C)\bigr),
+  \qquad
+  \mathrm{ask}^{\mathrm{fair}}_t = \min\!\bigl(\mathrm{ask}_B(t{-}\ell_B),\ \mathrm{ask}_C(t{-}\ell_C)\bigr),
+\]
+with $\mathrm{mid}^{\mathrm{fair}}_t = \tfrac{1}{2}(\mathrm{bid}^{\mathrm{fair}}_t + \mathrm{ask}^{\mathrm{fair}}_t)$.
+The choice of the cross-venue \emph{best} rather than a volume-weighted
+average is a defence against being arbitraged: clients can always
+transact at the tighter side elsewhere, so anything wider on $A$ is
+free optionality handed to adversarial flow. HFTs read the same
+feeds at $\ell_{\mathrm{HFT}} = 50\,\mathrm{ms}$, so the price we
+quote against is always structurally stale relative to theirs; this
+gap is priced explicitly as a spread component in
+Section~\ref{sec:quoter-spread}.
+
+\subsection{Reservation price: Avellaneda--Stoikov with infinite horizon}
+\label{sec:quoter-reservation}
+
+The classical inventory-shift mechanism of \citet{avellaneda2008high}
+uses a finite horizon $T$ with the penalty $\gamma\sigma^2(T-t)$.
+That formulation is inappropriate for a $24/5$ FX market: there is
+no terminal liquidation time at which inventory becomes worthless.
+We replace $T-t$ by a stationary discount $1/\omega$ with
+$\omega = 1/(8\,\mathrm{h})$ --- one FX session as the effective risk
+horizon --- which is the infinite-horizon limit of the same HJB
+system, studied formally by \citet{gueant2013dealing}.
+
+A second correction is numerical. Applying the raw Avellaneda--Stoikov
+shift with inventory in EUR (range $0$--$900\mathrm{k}$) produces a
+reservation displacement of several hundred basis points at ten
+percent inventory, three orders of magnitude larger than the
+half-spread itself. We therefore work with the normalised ratio
+$\rho = q/K$ and express the shift as a fraction of the half-spread,
+so that at $|\rho|=1$ the quoted centre is displaced by exactly one
+half-spread:
+\[
+  r_t \;=\; \mathrm{mid}^{\mathrm{fair}}_t \;-\; \rho \cdot h_t.
+\]
+Direction is preserved (a long EUR position drags the centre down
+and attracts sells); magnitude is now calibrated to the spread
+itself, with no new free parameter beyond $\gamma$.
+
+\subsection{Three-component spread with fee floor}
+\label{sec:quoter-spread}
+
+The half-spread $h_t$ is built as the sum of three economically
+distinct adverse-selection premia, floored by a fee-cover term,
+\[
+  h_t \;=\; \tfrac{1}{2}\bigl(h^{\mathrm{AS}}_t + h^{\mathrm{lat}}_t + h^{\mathrm{inv}}_t\bigr),
+  \qquad h_t \;\geq\; \phi \cdot \mathrm{fee}^A_{\mathrm{maker}} \cdot \mathrm{mid}^{\mathrm{fair}}_t.
+\]
+The Avellaneda--Stoikov component
+\[
+  h^{\mathrm{AS}}_t(\mathrm{bps}) \;=\; \gamma \cdot (\sigma\cdot 100)^2 \cdot \tfrac{1}{\omega}
+  \;+\; \tfrac{2}{\gamma}\,\ln\!\bigl(1 + \gamma/k\bigr)
+\]
+combines inventory-risk aversion (first term) with the convexity of
+the exponential order-arrival intensity (second term), as derived by
+\citet{avellaneda2008high} after the infinite-horizon substitution.
+The latency term
+$h^{\mathrm{lat}}_t = 2\sigma_{\mathrm{sec}}\sqrt{\Delta\ell}$, with
+$\Delta\ell = w_B(\ell_B-\ell_{\mathrm{HFT}}) + w_C(\ell_C-\ell_{\mathrm{HFT}})$,
+is two standard deviations of the expected adverse move during the
+window in which HFTs see the reference feeds and we do not --- a
+cushion against the free option they hold against our stale quotes.
+The capacity term $h^{\mathrm{inv}}_t = \alpha_s \rho^2 h^{\mathrm{AS}}_t$
+is quadratic in the inventory ratio: it is negligible near flat and
+widens sharply as we approach the delta limit, pushing flow away
+from the side that would deepen our position. Finally the floor
+$\phi \cdot \mathrm{fee}^A_{\mathrm{maker}} \cdot \mathrm{mid}^{\mathrm{fair}}_t$
+guarantees that the inception spread covers the maker fee on every
+fill: no trade is ever gross-negative, only fee-negative offset by
+subsequent inventory P\&L. The floor binds in calm regimes where the
+three adversarial premia would otherwise collapse below the fee.
+
+\subsection{Asymmetric skew and ladder}
+\label{sec:quoter-ladder}
+
+The reservation shift in Section~\ref{sec:quoter-reservation} is
+symmetric: it moves both sides of the quote by the same amount.
+\citet{gueant2017optimal} shows that the asymptotic optimum is
+instead an \emph{asymmetric} split of the half-spread --- widen the
+side that would deepen inventory, tighten the side that would reduce
+it. We therefore apply the Guéant skew
+\[
+  \Delta_t \;=\; q \cdot \sqrt{\frac{\gamma\sigma^2}{2k}},
+  \qquad
+  \mathrm{ask}^{\mathrm{post}}_t = r_t + h_t - \Delta_t,
+  \qquad
+  \mathrm{bid}^{\mathrm{post}}_t = r_t - h_t - \Delta_t,
+\]
+with $\Delta_t$ clipped so the tighter side can never breach the
+fee floor.
+
+The subject requires ten levels on each side. Levels step one tick
+further from the mid at each rung; sizes decay exponentially and
+are skewed against inventory,
+\[
+  \mathrm{size}^{\mathrm{bid}}_i \;=\; Q_0\,e^{-\beta i}\,(1 - \tfrac{1}{2}\overline{\rho}),
+  \qquad
+  \mathrm{size}^{\mathrm{ask}}_i \;=\; Q_0\,e^{-\beta i}\,(1 + \tfrac{1}{2}\overline{\rho}),
+\]
+with $\overline{\rho} = \mathrm{clip}(\rho,-1,1)$. This is a second,
+complementary inventory correction acting through \emph{depth}
+rather than \emph{price}: even if the Guéant skew is clipped by
+the fee floor, the ladder sizes still bias against further
+accumulation. Exponential decay concentrates displayed liquidity at
+the top of book, consistent with the empirical shape of
+limit-order-book queues.
+
+\subsection{Selective re-quoting}
+\label{sec:quoter-requote}
+
+Re-quoting every step is expensive in cancel/post messages and
+costly in time priority: orders that are still valid lose their
+queue position on every spurious cancel. We use a strict
+six-priority hierarchy, with each lower priority firing only if
+none above it did (Table~\ref{tab:quoter-requote}). Priority~2
+treats the $08{:}00$ and $16{:}00$ UTC FX session boundaries as
+hard resets of the full ladder, so session-specific state does not
+accumulate across regimes. Priority~3 closes the price-drift leak;
+priority~5 closes a subtler silent-accumulation leak where market
+prices are flat but our own inventory has moved enough to
+invalidate the ladder skew. Priority~6 fires on pure staleness and
+re-quotes at a tighter $0.7\times$ spread, so the refreshed quotes
+compete back into relevance rather than being re-posted at the
+same passive distance.
+
+\begin{table}[H]
+  \centering
+  \footnotesize
+  \begin{tabular}{cll}
+    \toprule
+    \textbf{P} & \textbf{Trigger} & \textbf{Action} \\
+    \midrule
+    1 & First call & Full ladder, no cancels \\
+    2 & Session boundary ($08{:}00$/$16{:}00$ UTC) & Cancel all, full ladder \\
+    3 & $|$best-price drift$|>0.25\,\mathrm{spread}$ & Cancel all, full ladder \\
+    4 & Fills / top-ups pending & Rebuild filled slots only \\
+    5 & $|\Delta q|/K>5\%$ since last reprice & Cancel all, full ladder \\
+    6 & Order older than $\tau_{\mathrm{stale}}$ & Cancel stale, reprice at $0.7\times$ spread \\
+    \bottomrule
+  \end{tabular}
+  \caption{Requote priorities; at most one rule fires per step.}
+  \label{tab:quoter-requote}
+\end{table}
+
+\subsection{Hedge router}
+\label{sec:quoter-hedge}
+
+When either $|q| > \delta_{\mathrm{lim}}\cdot K/2$ or
+$|q \cdot \mathrm{mid}^{\mathrm{fair}}| > \delta_{\mathrm{lim}}\cdot K/2$
+--- that is, either the EUR leg or its USD notional breaches the
+delta limit on half-capital --- we externalise risk through taker
+market orders on $B$ and $C$. Three decisions shape the router.
+First, the USD notional of EUR inventory is valued at the $B/C$
+cross-venue mid, not at $\mathrm{mid}_A$, because $A$'s mid is
+polluted by our own skewed quotes. Second, the split between
+venues is depth-aware: each venue is scored by
+\[
+  s_v \;=\; \frac{1}{\mathrm{fee}^v_{\mathrm{taker}}
+                      \;+\; \sigma_{\mathrm{sec}} \cdot \ell_v
+                      \;+\; \lambda \cdot \mathrm{mid}^{\mathrm{fair}}/D_v},
+\]
+combining the taker fee, the expected adverse move during execution
+lag, and a market-impact penalty inversely proportional to the
+available depth $D_v$ at the lagged step. The hedge is split
+$s_B:(s_B+s_C)$ with overflow re-routed to the other venue when the
+preferred one is depth-constrained. Third, when post-hedge inventory
+remains above the tighter threshold $\mathrm{hedge\_partial\_limit}\cdot K/2$
+--- meaning the combined $B{+}C$ depth was insufficient to bring us
+back --- we flip an emergency flag that multiplies the
+Avellaneda--Stoikov inventory-risk term by $5\times$ on the next step.
+Our own quotes on $A$ become so aggressively asymmetric that organic
+client flow cleans up the residual. This is the
+\citet{gueant2013dealing} inventory-penalty mechanism used as an
+overflow valve: we deliberately do not chase depth we cannot reach.
+
