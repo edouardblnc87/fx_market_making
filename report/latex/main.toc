@@ -35,6 +35,14 @@
 \contentsline {subsection}{\numberline {6.3}Inception spread versus mid-to-mid revaluation}{16}{subsection.6.3}%
 \contentsline {subsection}{\numberline {6.4}Continuous MtM and final inventory}{17}{subsection.6.4}%
 \contentsline {section}{\numberline {7}Phase 1 Backtest Report}{18}{section.7}%
-\contentsline {section}{\numberline {8}Phase 2 --- Calibration from Trading History}{19}{section.8}%
-\contentsline {section}{\numberline {9}Phase 3 --- Fallback Liquidity Under HFT Competition}{20}{section.9}%
-\contentsline {section}{\numberline {10}Conclusion}{21}{section.10}%
+\contentsline {subsection}{\numberline {7.1}What we simulated}{18}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Headline results}{18}{subsection.7.2}%
+\contentsline {subsection}{\numberline {7.3}Prices across the three venues}{19}{subsection.7.3}%
+\contentsline {subsection}{\numberline {7.4}Execution profile: the largest fills}{19}{subsection.7.4}%
+\contentsline {subsection}{\numberline {7.5}Inventory exposure and risk controls}{19}{subsection.7.5}%
+\contentsline {subsection}{\numberline {7.6}Per-trade P\&L dispersion}{20}{subsection.7.6}%
+\contentsline {subsection}{\numberline {7.7}Fill rate and ladder utilisation}{21}{subsection.7.7}%
+\contentsline {subsection}{\numberline {7.8}What Phase 2 will change}{22}{subsection.7.8}%
+\contentsline {section}{\numberline {8}Phase 2 --- Calibration from Trading History}{24}{section.8}%
+\contentsline {section}{\numberline {9}Phase 3 --- Fallback Liquidity Under HFT Competition}{25}{section.9}%
+\contentsline {section}{\numberline {10}Conclusion}{26}{section.10}%
