@@ -1,94 +1,92 @@
 # `client_flow` — Poisson Client Order Flow
 
-Models the arrival of client market and limit orders on Exchange A, grounded in Avellaneda & Stoikov (2006) Sections 2.4–2.5.
+Models the arrival of client market and limit orders on Exchange A, grounded in Avellaneda & Stoikov (2006) §§2.4–2.5.
 
 ---
 
 ## Theory
 
-Client orders arrive as a Poisson process with intensity:
+Client orders arrive as a Poisson process with intensity
 
 ```
-λ(δ) = A · exp(-k · δ)       δ in basis points
+λ(δ) = A · exp(−k · δ)       δ in basis points
 ```
 
-- **δ** — distance between the MM's quote and the mid-price (bps)
+- **δ** — distance between the MM's best quote and the mid (bps, ≥ 0)
 - **A** — baseline arrival rate at δ = 0 (per second)
-- **k** — decay rate per bp; half-life = ln(2)/k bps
+- **k** — exponential decay per bp; half-life = ln(2) / k bps
 
-Buy and sell sides are independent with separate (A, k) parameters.
+Buy and sell sides are independent with separate `(A, k)` pairs.
 
-Order sizes follow a truncated Pareto (power law):
+Order sizes follow a **truncated Pareto**:
 
 ```
-f(x) ∝ x^{-1-α}    x ∈ [size_min, size_max]
+f(x) ∝ x^{−1−α}    x ∈ [size_min, size_max]
 ```
 
-with α ≈ 1.5 (Gabaix et al. 2003, Gopikrishnan et al. 2000).
+Sampling uses the inverse-CDF transform (see [size_model.py](size_model.py)).
+Reference: Gabaix et al. (2003), Gopikrishnan et al. (2000).
 
 ---
 
 ## Files
 
 | File | Role |
-|------|------|
-| `config.py` | Default parameters — A, k, α, size bounds, MO ratio |
-| `arrival.py` | `intensity(delta_bps, A, k)` and `sample_arrival(λ, dt, rng)` |
-| `size_model.py` | `sample_size(alpha, x_min, x_max, rng)` — truncated Pareto via inverse CDF |
-| `flow_generator.py` | `ClientFlowGenerator` — main class |
+|---|---|
+| [config.py](config.py) | Default parameters — `A_BUY/SELL`, `K_BUY/SELL`, `ALPHA`, `SIZE_MIN/MAX`, `MARKET_ORDER_RATIO` |
+| [arrival.py](arrival.py) | `intensity(delta_bps, A, k)` and `sample_arrival_count(λ, dt, rng)` |
+| [size_model.py](size_model.py) | `sample_size(alpha, x_min, x_max, rng) -> int` (rounded, floored at `x_min`) |
+| [flow_generator.py](flow_generator.py) | `ClientFlowConfig`, `ClientFlowGenerator` |
+
+> **Dead code:** [arrival.py:43](arrival.py#L43) defines `sample_arrival` (Bernoulli-style bool) which is not referenced anywhere in the codebase. Candidate for removal — `sample_arrival_count` covers all current uses.
 
 ---
 
-## Key class: `ClientFlowGenerator`
+## `ClientFlowGenerator`
 
 ```python
 from utils.client_flow.flow_generator import ClientFlowGenerator, ClientFlowConfig
 
-cfg = ClientFlowConfig(A_buy=1.5, A_sell=1.5, k_buy=1.5, k_sell=1.5)
-gen = ClientFlowGenerator(config=cfg, seed=42)
+gen = ClientFlowGenerator(config=ClientFlowConfig(), seed=42)
 ```
 
-**`generate_step(mid_price, best_bid, best_ask, dt) -> list[Order]`**
-Called once per simulation step. Returns 0, 1, or 2 `Order` objects (one per side max).
+### `generate_step(mid_price, best_bid, best_ask, dt) -> list[Order]`
 
-**`generate_session(mid_prices, bid_prices, ask_prices, dt) -> list[tuple[int, Order]]`**
-Generates all client orders for a full session. Returns `(step_index, Order)` pairs.
+Called once per simulation step (by `Controller`). Per side:
 
----
+1. Compute `δ_bps = (mid − best_bid) / mid · 10_000` (bid side) and the symmetric ask-side distance.
+2. `λ = intensity(δ_bps, A, k)`.
+3. Draw `N ~ Poisson(λ · dt)` — **can exceed 1** per side, per step.
+4. For each arrival, build an `Order` via `_build_order` (see below).
 
-## Order types
+Returns a flat list of all orders (buy + sell) generated in this step.
 
-Each arrival is randomly assigned:
-- **Market order** (50% default): priced to cross immediately — buy at `best_ask`, sell at `best_bid`
-- **Limit order** (50% default): placed at `mid ± δ` where δ ~ Exponential(k) in bps
+### `generate_session(mid_prices, bid_prices, ask_prices, dt) -> list[tuple[int, Order]]`
 
-Both types use `origin="client"` and feed directly into `Order_book.add_orders_batch`.
+Convenience wrapper: iterates `generate_step` over full arrays and returns `(step_index, Order)` pairs. Not used by `Controller` (which calls `generate_step` directly) — kept for notebook demos.
 
----
+### Order construction (`_build_order`)
 
-## Integration with Exchange A
+Each arrival draws a Pareto size, then flips market vs. limit with probability `market_order_ratio`:
 
-```python
-# MM has already quoted on Exchange A
-ob._generate_n_random_order(40)          # seed MM book
+- **Market order** — priced to cross immediately: buy at `best_ask`, sell at `best_bid`.
+- **Limit order** — rests in the book at `mid ± (δ_bps / 10_000) · mid`, where `δ_bps ~ Exponential(1/k)`.
 
-# Generate client flow and submit step by step
-for step, order in gen.generate_session(mid, bid, ask, dt=0.1):
-    ob.add_orders_batch([order])         # add to book
-    ob.try_clear()                       # match crossing orders vs MM quotes
-```
+Price is rounded to 4 decimals (tick convention). `origin="client"` so the matching engine knows it can be crossed against MM orders.
 
 ---
 
 ## Parameters
 
-| Parameter | Default | Meaning |
-|-----------|---------|---------|
-| `A_buy` / `A_sell` | 1.5 | Arrival rate at δ=0 (per second) |
-| `k_buy` / `k_sell` | 1.5 | Decay per bp — half-life ≈ 0.46 bp |
-| `alpha` | 1.5 | Pareto tail exponent |
-| `size_min` | 1 000 EUR | Minimum order size |
-| `size_max` | 100 000 EUR | Maximum order size |
-| `market_order_ratio` | 0.5 | Fraction of arrivals that are market orders |
+Defaults in [config.py](config.py) (recalibrated April 2026):
 
-See `test/client_flow.ipynb` for a full demonstration.
+| Parameter | Default | Meaning |
+|---|---|---|
+| `A_BUY` / `A_SELL` | `0.007` | Arrival rate at δ=0 (per second) |
+| `K_BUY` / `K_SELL` | `0.3` | Decay per bp — half-life ≈ 2.31 bp |
+| `ALPHA` | `1.5` | Pareto tail exponent |
+| `SIZE_MIN` | `1 000` EUR | Truncation floor |
+| `SIZE_MAX` | `100 000` EUR | Truncation ceiling |
+| `MARKET_ORDER_RATIO` | `0.5` | Fraction of arrivals that are market orders |
+
+See [test/client_flow.ipynb](../../../test/client_flow.ipynb) for a demonstration.

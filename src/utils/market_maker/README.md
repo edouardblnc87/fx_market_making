@@ -11,7 +11,9 @@ HFTs access both feeds in 50ms, giving them a 150ms/120ms edge over us.
 
 Starting capital K is half in EUR, half in USD (flat inventory = 0 at session start). Capital is thus split 50/50 between EUR and USD at inception, so risk limits are expressed against `K / 2` (each currency leg). Delta risk limit fires when `|inventory| > delta_limit × (K/2)` **or** `|inventory × fair_mid| > delta_limit × (K/2)` — both EUR and USD notional are checked. We then hedge via taker market orders on B and/or C.
 
-EUR/USD trades 24 hours a day. The quoter organises the day into three FX sessions with hard resets at **08:00 and 16:00 UTC** (London, New York). The A-S inventory penalty uses an infinite-horizon stationary discount `ω = 1/(8h)` — the effective risk horizon — rather than a finite `T − t` countdown, because a 24/5 FX market has no terminal liquidation date.
+EUR/USD trades 24 hours a day. The quoter organises the day into three FX sessions (Tokyo, London, New York) with hard resets at **08:00 and 16:00 UTC**. The A-S inventory penalty uses an infinite-horizon stationary discount `ω = 1/(8h)` — the effective risk horizon — rather than a finite `T − t` countdown, because a 24/5 FX market has no terminal liquidation date.
+
+> **Session-adaptive k — currently disabled.** `_SESSION_K_MULTIPLIERS` in [quoter.py:21-25](quoter.py#L21-L25) originally scaled `cfg.k` by session liquidity (Tokyo 0.75×, London 1.25×, NY 1.00×). All three multipliers are presently set to `1.00` (the intended values are preserved in comments), so `_session_k(t)` and `_precomp_k` return a flat `cfg.k` across sessions. Re-enable by uncommenting the Tokyo/London factors.
 
 ---
 
@@ -143,6 +145,8 @@ When `_hedge_emergency` is active, `compute_quotes` multiplies the A-S inventory
 
 Each hedge leg is recorded in `_fill_history` with `is_hedge=True` and `venue="B"` or `"C"`.
 
+**EOD flat.** If `eod_flat_interval > 0`, `execute_hedge` also force-flattens inventory to zero every `eod_flat_interval` seconds (tracked via `_last_eod_day`), regardless of whether `needs_hedge` would have fired. These legs are tagged `is_eod_flat=True`. Default is `0.0` (disabled — continuous run).
+
 ---
 
 ## Trade History
@@ -164,6 +168,7 @@ Each hedge leg is recorded in `_fill_history` with `is_hedge=True` and `venue="B
 | `cash_flow` | Signed cash impact net of fees (USD) |
 | `inventory_after` | Cumulative EUR inventory after this fill |
 | `is_hedge` | True for hedge legs on B/C |
+| `is_eod_flat` | True if this hedge leg was fired by the EOD flat trigger |
 | `venue` | `"A"`, `"B"`, or `"C"` |
 
 **Cash flow convention (USD):**
@@ -172,7 +177,7 @@ Each hedge leg is recorded in `_fill_history` with `is_hedge=True` and `venue="B
 - Hedge sell on B/C: `+bid_venue × size × (1 − taker_fee)`  (crosses the bid as a taker)
 - Hedge buy on B/C: `−ask_venue × size × (1 + taker_fee)`  (crosses the ask as a taker)
 
-Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P&L, MtM P&L, inception spread, and inventory revaluation.
+Use `PnLTracker` (lives in [`src/utils/report/`](../report/), not this folder) to decompose this into realized P&L, MtM P&L, inception spread, and inventory revaluation.
 
 ---
 
@@ -180,9 +185,10 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 
 | File | Contents |
 |---|---|
-| `quoter.py` | `Quoter`, `QuoterConfig` |
-| `pnl_tracker.py` | `PnLTracker` — static P&L analysis methods |
-| `events.py` (order_book/) | `FillEvent` dataclass shared between book and quoter |
+| [quoter.py](quoter.py) | `Quoter`, `QuoterConfig` |
+| [events.py](../order_book/events.py) (in `order_book/`) | `FillEvent` dataclass shared between book and quoter |
+
+`PnLTracker` has moved to [`src/utils/report/`](../report/) — import it from there.
 
 ### `QuoterConfig` parameters
 
@@ -198,7 +204,7 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 | `Q_base` | 70,000 | Base EUR size at best level |
 | `tick_size` | 0.0001 | 1 bp tick |
 | `requote_threshold_spread_fraction` | 0.25 | Min price move (fraction of spread) to trigger P3 requote |
-| `stale_s` | 40.0 | Age threshold for staleness rule (seconds) |
+| `stale_s` | 10.0 | Age threshold for staleness rule (seconds) |
 | `stale_tight_fraction` | 0.7 | Spread multiplier when P6 refreshes stale orders |
 | `inventory_requote_fraction` | 0.05 | \|Δ inventory\| / K threshold to trigger P5 requote |
 | `imbalance_min_samples` | 10 | Minimum fills before the imbalance signal is trusted |
@@ -209,7 +215,7 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 | `weight_B / weight_C` | 0.75 / 0.25 | Volume weights for fair mid |
 | `latency_B_s / latency_C_s` | 0.200 / 0.170 | Data latency (seconds) |
 | `latency_hft_s` | 0.050 | HFT latency |
-| `delta_limit` | 0.60 | Hedge trigger (fraction of `K/2`; applied independently to EUR and USD legs) |
+| `delta_limit` | 0.90 | Hedge trigger (fraction of `K/2`; applied independently to EUR and USD legs) |
 | `hedge_partial_limit` | 0.80 | If post-hedge \|q\| > `hedge_partial_limit × (K/2)`, emergency mode activates |
 | `emergency_penalty_multiplier` | 5.0 | A-S penalty amplifier during emergency (skews quotes on A) |
 | `eod_flat_interval` | 0.0 | EOD-flat cadence in seconds; `0.0` disables continuous-running EOD flats |
@@ -237,43 +243,25 @@ Use `PnLTracker` (see `pnl_tracker_README.md`) to decompose this into realized P
 
 ## Minimal usage
 
+The canonical driver is `Controller` ([`src/utils/report/`](../report/)) — **do not write bare step-loops**.
+
 ```python
-import copy
-from utils.stock_simulation import Stock
-from utils.market_simulator.market import Market
-from utils.order_book.order_book_impl import Order_book
 from utils.market_maker.quoter import Quoter, QuoterConfig
-from utils.market_maker.pnl_tracker import PnLTracker
+from utils.order_book.order_book_impl import Order_book
+from utils.client_flow import ClientFlowGenerator
+from utils.report import Controller
 
-stock = Stock(drift=0.0, vol=0.20)
-stock.simulate_garch(n_days=1, dt_seconds=0.01)
-
-market_B = Market(stock)
-market_B.generate_noised_mid_price()
-market_B.build_spread(option="Skew", window_size=600, alpha=0.5, gamma=0.3, ema_span=500, threshold=3)
-market_B.generate_depth(mean_eur=500_000)   # EUR size at best quote each step
-
-market_C = copy.deepcopy(market_B)
-market_C.build_spread(option="Adaptive", window_size=600)
-market_C.generate_depth(mean_eur=200_000)   # C has less volume than B
-
-book = Order_book()
-mm = Quoter(market_B, market_C, config=QuoterConfig(), capital_K=1_000_000.0)
+book  = Order_book()
+mm    = Quoter(market_B, market_C, config=QuoterConfig(), capital_K=1_000_000.0)
 book.register_quoter_listener(mm.on_fill)
+gen   = ClientFlowGenerator(seed=42)
 
-dt = stock.time_step
-for step in range(stock.n_steps):
-    t = step * dt
-    book.tick(step)
-    quotes, cancels = mm.compute_quotes(step, t, book.mm_resting_orders)
-    book.cancel_orders(cancels)
-    book.post_mm_quotes(quotes)
-    # ... route client orders ...
-    mm.execute_hedge(step, t)
-
-rep = PnLTracker.report(mm.trade_history, current_mid=fair_mid)
-print(rep)
+ctrl  = Controller(market_B, market_C, book, mm, gen.generate_step)
+ctrl.simulate()
+ctrl.report()
 ```
+
+See [test/report.ipynb](../../../test/report.ipynb) for the full reporting notebook.
 
 ---
 

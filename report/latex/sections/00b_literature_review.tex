@@ -1,0 +1,58 @@
+\section{Literature Review}
+\label{sec:literature}
+
+The design of an inventory-aware quoting policy originates with
+\citet{hostoll1981optimal}, who frame the dealer's problem as a trade-off
+between expected spread capture and the variance of an accumulating
+inventory. \citet{avellaneda2008high} recast this intuition as a stochastic
+control problem with a Poisson fill intensity of the form
+$\lambda(\delta) = A\,e^{-k\delta}$ and derive closed-form reservation
+prices that tilt quotes against the current position. Because the original
+Avellaneda--Stoikov solution depends on a terminal liquidation date that
+does not exist for a 24/5 FX book, we follow the infinite-horizon limit
+described by \citet{gueant2013dealing} and \citet{gueant2017optimal}, in
+which a discount rate $\omega$ replaces the time-to-horizon and the
+inventory penalty becomes stationary. This is the formulation implemented
+in our Phase~1 quoter.
+
+The second strand of the literature informs our treatment of order flow
+and adverse selection. \citet{roll1984simple} gives the effective-spread
+decomposition we rely on for cross-venue sanity checks, while
+\citet{biais1995empirical} provide the empirical baseline for limit order
+book dynamics. \citet{engle2004impacts} and \citet{cont2014price} establish
+that short-horizon quote revisions are driven primarily by signed
+order-flow imbalance; this motivates our OFI-based skew, which adjusts the
+reservation price in the direction of recent imbalance rather than
+inferring it from price moves alone. To compensate quoted spreads for the
+$150$\,ms latency gap against HFTs, we draw on the adverse-selection and
+latency-aware quoting refinements consolidated by
+\citet{carteajaimungal2015algorithmic}, which justify the asymmetric
+spread regime and the emergency inventory multiplier used in our hedge
+controller.
+
+The Phase~2 calibration layer re-estimates the statistical primitives that
+Phase~1 took as given. Volatility enters the quoter through the A--S
+inventory term $\gamma\sigma^{2}/(2\omega)$; we estimate $\sigma$ with a
+GARCH(1,1) model \citep{bollerslev1986generalized} on the simulated
+reference mid, and cross-check it against the exponentially weighted
+estimator of \citet{riskmetrics1996}, which is better suited to the short
+effective horizons over which the quoter reacts. Client order sizes are
+heavy-tailed but bounded from above, so we fit a truncated Pareto
+distribution following \citet{aban2006parameter}, whose MLE formulation
+handles the upper cap cleanly; the power-law regularity of large trades
+documented by \citet{gabaix2003theory} is what justifies this parametric
+family in the first place.
+
+Relative to this body of work, our contribution is a fully simulated
+multi-venue FX designated-market-maker study rather than a new theoretical
+model. We combine an infinite-horizon Avellaneda--Stoikov skeleton with an
+OFI-based skew, a cross-venue latency-aware fair mid that blends two
+reference venues at their respective delays, session-adaptive arrival
+decay, and a depth-gated hedge router that externalises inventory on the
+reference venues. The whole pipeline is run in two stages: a
+heuristic-parameter Phase~1, followed by a Phase~2 in which arrival
+intensity, size distribution, volatility, and the risk-aversion $\gamma$
+are re-estimated by maximum likelihood on a simulated month of fills.
+This two-phase calibration workflow lets us quantify the marginal value
+of data-driven parameters over first-principles defaults in an
+environment that would otherwise have no trading history at launch.
