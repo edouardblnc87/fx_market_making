@@ -141,7 +141,7 @@ def run_sim(stock, market_B, market_C, quoter_config,
     from ..report.controller import Controller
     from ..client_flow.flow_generator import ClientFlowGenerator
 
-    book = Order_book()
+    book = Order_book(track_submissions=True)
     mm   = Quoter(market_B, market_C, config=quoter_config, capital_K=capital)
     book.register_quoter_listener(mm.on_fill)
 
@@ -158,10 +158,21 @@ def run_sim(stock, market_B, market_C, quoter_config,
     print(f"[sim] done in {time.time() - t0:.1f} s  ({n:,} steps)")
 
     sl = ctrl.step_log
+    # Smart sampling: always keep every step where a hedge fired, then fill the
+    # remainder with uniform downsampling up to ~2000 total points.
+    n_sl = len(sl)
+    stride = max(1, n_sl // 2000)
+    uniform_idx = set(range(0, n_sl, stride))
+    if 'hedge_fired' in sl.columns:
+        hedge_idx = set(sl.index[sl['hedge_fired'] > 0].tolist())
+    else:
+        hedge_idx = set()
+    sample_idx = sorted(uniform_idx | hedge_idx)
     return {
         "fill_history":    mm._fill_history,
         "inventory":       mm.inventory,
-        "step_log_sample": sl.iloc[::max(1, len(sl) // 2000)].to_dict("records"),
+        "step_log_sample": sl.iloc[sample_idx].to_dict("records"),
+        "order_history":   book._submission_log,
     }
 
 
@@ -183,7 +194,7 @@ def restore_ctrl(state: dict, market_B, market_C, quoter_config, capital: float,
     from ..report.controller import Controller
     from ..client_flow.flow_generator import ClientFlowGenerator
 
-    book = Order_book()
+    book = Order_book(track_submissions=True)
     mm   = Quoter(market_B, market_C, config=quoter_config, capital_K=capital)
     book.register_quoter_listener(mm.on_fill)
 
@@ -194,9 +205,10 @@ def restore_ctrl(state: dict, market_B, market_C, quoter_config, capital: float,
             gen.generate_step(mid_price=mid, best_bid=bid, best_ask=ask, dt=dt),
     )
 
-    mm._fill_history = state["fill_history"]
-    mm.inventory     = state["inventory"]
-    ctrl._step_log   = state["step_log_sample"]
+    mm._fill_history       = state["fill_history"]
+    mm.inventory           = state["inventory"]
+    ctrl._step_log         = state["step_log_sample"]
+    book._submission_log   = state.get("order_history", [])
 
     return ctrl, mm, book
 
