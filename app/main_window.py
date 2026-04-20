@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
         r2.addWidget(self._origin)
         r2.addSpacing(12)
         r2.addWidget(QLabel("DT (s):"))
-        self._dt = _spin(0.05, 0.001, 10.0, 3, 0.05)
+        self._dt = _spin(0.1, 0.001, 10.0, 3, 0.05)
         r2.addWidget(self._dt)
         r2.addStretch()
         lay.addLayout(r2)
