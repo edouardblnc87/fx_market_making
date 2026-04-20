@@ -92,6 +92,12 @@ class QuoterConfig:
     fee_C_maker: float = 0.00009
     fee_C_taker: float = 0.0003
 
+    # Inception spread floor: guarantees edge > 0 on every fill.
+    # half_spread is floored at fee_A_maker × fair_mid × min_edge_multiple.
+    # 1.0 = break-even (inception spread exactly covers maker fee).
+    # Raise above 1.0 to keep a cushion, e.g. 1.5 → 50% buffer above fees.
+    min_edge_multiple: float = 1.0
+
 
 class Quoter:
     """
@@ -179,6 +185,8 @@ class Quoter:
         self._latency_coeff: float  = 2.0 * np.sqrt(self._effective_gap_s / TRADING_SECONDS_PER_YEAR)
         # dt fraction used in _estimate_vol
         self._dt_frac: float        = market_B.stock.time_step / TRADING_SECONDS_PER_YEAR
+        # fee floor coefficient: fee_A_maker × min_edge_multiple (multiplied by fair_mid each step)
+        self._fee_floor_coeff: float = self.cfg.fee_A_maker * self.cfg.min_edge_multiple
 
         # ── Per-step caches ───────────────────────────────────────────────────
         # Stale B/C quotes set by compute_quotes each step; reused by execute_hedge
@@ -305,7 +313,7 @@ class Quoter:
         sigma = self._estimate_vol(step)
         self._cache_sigma = sigma   # reused by execute_hedge
 
-        inv_horizon_y = getattr(self, '_inv_horizon_y', 1.0 / (self.cfg.omega * TRADING_SECONDS_PER_YEAR))
+        inv_horizon_y = self._inv_horizon_y
         if self._hedge_emergency:
             inv_horizon_y *= self.cfg.emergency_penalty_multiplier
 
@@ -314,19 +322,19 @@ class Quoter:
 
         # ── Spread first (needed to scale the reservation price shift) ──────────
         # A-S optimal spread under infinite horizon
-        two_over_gamma = getattr(self, '_two_over_gamma', 2.0 / self.cfg.gamma)
+        two_over_gamma = self._two_over_gamma
         spread_AS_bps = (
             self.cfg.gamma * (sigma * 100.0) ** 2 * inv_horizon_y
             + two_over_gamma * np.log(1.0 + self.cfg.gamma / k_eff)
         )
         spread_AS = spread_AS_bps / 10_000.0 * fair_mid
-        latency_coeff = getattr(self, '_latency_coeff',
-                                2.0 * np.sqrt(self._effective_gap_s / TRADING_SECONDS_PER_YEAR))
+        latency_coeff = self._latency_coeff
         spread_latency = latency_coeff * sigma   # = 2·σ·√(gap/TSPY)
-        inventory_ratio = self.inventory * getattr(self, '_inv_capital_K', 1.0 / self.capital_K)
+        inventory_ratio = self.inventory * self._inv_capital_K
         spread_inventory = self.cfg.alpha_spread * inventory_ratio**2 * spread_AS
         total_spread = spread_AS + spread_latency + spread_inventory
-        half_spread = max(total_spread / 2.0, self.cfg.tick_size)
+        fee_floor = self._fee_floor_coeff * fair_mid   # guarantees inception spread ≥ 0
+        half_spread = max(total_spread / 2.0, self.cfg.tick_size, fee_floor)
 
         # ── Reservation price ────────────────────────────────────────────────────
         # The original A-S formula (inventory × γ × σ² × inv_horizon_y) produces a
@@ -345,8 +353,9 @@ class Quoter:
         # ── Asymmetric delta skew (Guéant) ────────────────────────────────────────
         if self.cfg.use_asymmetric_delta:
             skew_delta = self.inventory * np.sqrt(self.cfg.gamma * sigma**2 / (2.0 * k_eff))
-            skew_delta = np.clip(skew_delta, -(half_spread - 0.5 * self.cfg.tick_size),
-                                              (half_spread - 0.5 * self.cfg.tick_size))
+            fee_floor   = self._fee_floor_coeff * fair_mid
+            max_skew    = max(half_spread - fee_floor, 0.0)
+            skew_delta  = np.clip(skew_delta, -max_skew, max_skew)
         else:
             skew_delta = 0.0
 
@@ -413,7 +422,7 @@ class Quoter:
         stale_slots: Set[Tuple[str, int]] = set()
         cancel_ids_6: List[str] = []
         for oid, info in resting_orders.items():
-            if info["age"] > self._stale_steps:
+            if (step - info["post_step"]) > self._stale_steps:
                 cancel_ids_6.append(oid)
                 stale_slots.add((info["direction"], info["level"]))
         if stale_slots:
@@ -546,16 +555,16 @@ class Quoter:
                    else self.capital_K * self.cfg.weight_C)
 
         # Reuse stale quotes and sigma already computed by compute_quotes this step.
-        bid_B = getattr(self, '_cache_bid_B', None)
-        if bid_B is None:
+        bid_B = self._cache_bid_B
+        ask_B = self._cache_ask_B
+        bid_C = self._cache_bid_C
+        ask_C = self._cache_ask_C
+        sigma = self._cache_sigma
+        # Safety: if cache not yet populated (prices = 0.0), fall back to direct lookup.
+        if bid_B == 0.0 and ask_B == 0.0:
             bid_B, ask_B = self._get_stale_quotes(self.market_B, step, self._lag_B)
             bid_C, ask_C = self._get_stale_quotes(self.market_C, step, self._lag_C)
             sigma = self._estimate_vol(step)
-        else:
-            ask_B = self._cache_ask_B
-            bid_C = self._cache_bid_C
-            ask_C = self._cache_ask_C
-            sigma = getattr(self, '_cache_sigma', self._estimate_vol(step))
 
         size_B, size_C, _ = self.hedge_order(depth_B, depth_C, fair_mid, sigma)
 
@@ -703,9 +712,11 @@ class Quoter:
 
     def _build_ladder_tight(self, best_bid: float, best_ask: float, inventory_ratio: float, spread_multiplier: float) -> List[Order]:
         """Full ladder repriced with a tighter spread (spread_multiplier < 1.0).
-        Squeezes the bid/ask around the current mid by spread_multiplier before building."""
+        Squeezes the bid/ask around the current mid by spread_multiplier before building.
+        The fee floor is still enforced so inception spread cannot go negative."""
         mid = (best_bid + best_ask) * 0.5
-        half = (best_ask - best_bid) * 0.5 * spread_multiplier
+        fee_floor = self._fee_floor_coeff * mid
+        half = max((best_ask - best_bid) * 0.5 * spread_multiplier, fee_floor)
         tight_bid = self._snap_to_tick(mid - half)
         tight_ask = self._snap_to_tick(mid + half)
         if tight_bid >= tight_ask:
@@ -812,8 +823,7 @@ class Quoter:
         """
         if step < self._vol_min_steps or self._ewma_var is None:
             return self.market_B.stock.vol
-        dt_frac = getattr(self, '_dt_frac', self.market_B.stock.time_step / TRADING_SECONDS_PER_YEAR)
-        return max(np.sqrt(self._ewma_var / dt_frac), 1e-6)
+        return max(np.sqrt(self._ewma_var / self._dt_frac), 1e-6)
 
     def _get_stale_quotes(self, market: Market, step: int, lag: int) -> Tuple[float, float]:
         stale_step = max(0, step - lag)

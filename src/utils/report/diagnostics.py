@@ -488,7 +488,8 @@ class DiagnosticsReport:
         mean_spB = float(np.nanmean(self.spB))
         premium  = mean_spA - mean_spB
 
-        inception_pnl = float(mf["cash_flow"].sum()) if len(mf) else 0.0
+        from .pnl_tracker import PnLTracker
+        inception_pnl = PnLTracker.inception_spread_pnl(th) if len(th) else 0.0
         total_fees    = float(th["fee_cost"].abs().sum()) if len(th) else 0.0
         edge_fee_ratio = inception_pnl / total_fees if total_fees > 0 else float("inf")
 

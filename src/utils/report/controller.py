@@ -50,7 +50,11 @@ class Controller:
         self.quoter = quoter
         self.client_flow_fn = client_flow_fn
         self.number_order = []
+        
+        # Cache frequently accessed config values to avoid chained attribute lookups.
         self._dt: float = market_B.stock.time_step
+        self._weight_B: float = quoter.cfg.weight_B
+        self._weight_C: float = quoter.cfg.weight_C
 
         # Phase 3 — HFT agent (None in Phase 1/2)
         self._hft_enabled: bool = hft
@@ -88,7 +92,7 @@ class Controller:
           5. Execute hedge on B/C if delta limit is breached.
           6. Log the step state.
         """
-        dt = getattr(self, '_dt', self.market_B.stock.time_step)
+        dt = self._dt
 
         self.book.tick(step)
 
@@ -105,35 +109,34 @@ class Controller:
         self.book.post_mm_quotes(quotes)
         self._n_quotes_posted += len(quotes)
 
-        # Market A best bid/ask from resting MM orders (single pass).
-        bids = []
-        asks = []
+        # Market A best bid/ask from resting MM orders.
+        # Single pass with direct min/max tracking — avoids two list allocations per step.
+        best_bid_A = -1e18
+        best_ask_A = 1e18
         for v in resting.values():
+            p = v['price']
             if v['direction'] == 'buy':
-                bids.append(v['price'])
-            else:
-                asks.append(v['price'])
+                if p > best_bid_A:
+                    best_bid_A = p
+            elif p < best_ask_A:
+                best_ask_A = p
 
-        if bids and asks:
-            best_bid_A = max(bids)
-            best_ask_A = min(asks)
-            mid_A = (best_bid_A + best_ask_A) / 2.0
-            a = self.client_flow_fn(step, t, mid_A, best_bid_A, best_ask_A, dt)
-            self.number_order.append(a)
-            for order in a:
+        if best_bid_A > -1e18 and best_ask_A < 1e18:
+            mid_A = (best_bid_A + best_ask_A) * 0.5
+            for order in self.client_flow_fn(step, t, mid_A, best_bid_A, best_ask_A, dt):
                 self.book.route_client_order(order)
         else:
             best_bid_A = np.nan
             best_ask_A = np.nan
 
-        self.quoter.execute_hedge(step, t)
+        hedge_fired = self.quoter.execute_hedge(step, t)
 
-        self._log_step(step, t, best_bid_A, best_ask_A)
+        self._log_step(step, t, best_bid_A, best_ask_A, hedge_fired)
 
     def simulate(self, limit: int | None = None) -> None:
         """Run the full simulation from step 0 to n_steps − 1."""
         n  = limit if limit is not None else self.market_B.stock.n_steps
-        dt = getattr(self, '_dt', self.market_B.stock.time_step)
+        dt = self._dt
 
         # Pre-allocate contiguous numpy arrays for the step log.
         # Writing by index is ~10× faster than appending dicts to a list.
@@ -174,14 +177,10 @@ class Controller:
             self.hft_agent.state = HFTState.ACTIVE
             self.hft_agent._offline_since_t = None
 
-        if limit is not None:
-            for s in tqdm(range(n)):
-                self.step(s, s * dt)
-        else:
-            for s in tqdm(range(n)):
-                self.step(s, s * dt)
+        for s in tqdm(range(n)):
+            self.step(s, s * dt)
 
-    def _log_step(self, step: int, t: float, bid_A: float, ask_A: float) -> None:
+    def _log_step(self, step: int, t: float, bid_A: float, ask_A: float, hedge_fired: bool = False) -> None:
         """
         Write a lightweight state snapshot for this step.
 
@@ -200,16 +199,14 @@ class Controller:
         fills_this_step           — new fills (MM + hedge) since last step
         total_quotes_posted       — cumulative MM quotes sent to book
         """
-        bid_B = float(self.market_B.bid_price[step])
-        ask_B = float(self.market_B.ask_price[step])
-        bid_C = float(self.market_C.bid_price[step])
-        ask_C = float(self.market_C.ask_price[step])
+        bid_B = self.market_B.bid_price[step]
+        ask_B = self.market_B.ask_price[step]
+        bid_C = self.market_C.bid_price[step]
+        ask_C = self.market_C.ask_price[step]
         mid_B = (bid_B + ask_B) * 0.5
         mid_C = (bid_C + ask_C) * 0.5
 
-        wb = self.quoter.cfg.weight_B
-        wc = self.quoter.cfg.weight_C
-        fair_mid = wb * mid_B + wc * mid_C
+        fair_mid = self._weight_B * mid_B + self._weight_C * mid_C
 
         n_fills_now = len(self.quoter._fill_history)
         fills_this_step = n_fills_now - self._n_fills_prev
@@ -222,7 +219,7 @@ class Controller:
 
         mid_A = (bid_A + ask_A) * 0.5 if not np.isnan(bid_A) else np.nan
 
-        if getattr(self, '_log_arrays', None) is not None:
+        if self._log_arrays is not None:
             a = self._log_arrays
             a['step'][step]                = step
             a['t'][step]                   = t
@@ -272,7 +269,7 @@ class Controller:
     @property
     def step_log(self) -> pd.DataFrame:
         """All logged steps as a DataFrame (one row per simulation step)."""
-        if getattr(self, '_log_arrays', None) is not None:
+        if self._log_arrays is not None:
             n = self._log_ptr
             return pd.DataFrame({k: v[:n] for k, v in self._log_arrays.items()})
         return pd.DataFrame(self._step_log)
@@ -283,7 +280,7 @@ class Controller:
         return self.quoter.trade_history
 
     def _current_fair_mid(self) -> float:
-        if getattr(self, '_log_arrays', None) is not None and self._log_ptr > 0:
+        if self._log_arrays is not None and self._log_ptr > 0:
             return float(self._log_arrays['fair_mid'][self._log_ptr - 1])
         if self._step_log:
             return self._step_log[-1]['fair_mid']
