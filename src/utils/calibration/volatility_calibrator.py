@@ -34,7 +34,7 @@ class VolatilityCalibrator:
         Grid-search over EWMA spans, pick the one that minimises
         out-of-sample RMSE of variance prediction.
 
-        Returns {"vol_window": int, "rmse": float}
+        Returns {"vol_window_s": float, "rmse": float}  (seconds, not steps)
         Result is cached after first call.
         """
         if hasattr(self, "_ewma_cache"):
@@ -43,7 +43,7 @@ class VolatilityCalibrator:
         n = len(r)
         split = int(n * 0.7)
         if split < 500:
-            return {"vol_window": 6000, "rmse": float("nan")}
+            return {"vol_window_s": 6000 * self._dt, "rmse": float("nan")}
 
         r_train = r[:split]
         r_test = r[split:]
@@ -51,15 +51,13 @@ class VolatilityCalibrator:
 
         candidates = [w for w in [500, 1000, 2000, 4000, 6000, 10000] if w < split]
         if not candidates:
-            return {"vol_window": 6000, "rmse": float("nan")}
+            return {"vol_window_s": 6000 * self._dt, "rmse": float("nan")}
 
         best_w, best_rmse = 6000, float("inf")
 
         for w in candidates:
             ewma_var = pd.Series(r_train ** 2).ewm(span=w).mean().values
-            # Carry forward last train variance as forecast for every test step
             last_var = ewma_var[-1]
-            # Online EWMA through test set
             alpha_ewm = 2.0 / (w + 1)
             forecast = np.empty(len(r_test))
             v = last_var
@@ -72,7 +70,7 @@ class VolatilityCalibrator:
                 best_rmse = rmse
                 best_w = w
 
-        self._ewma_cache = {"vol_window": best_w, "rmse": best_rmse}
+        self._ewma_cache = {"vol_window_s": best_w * self._dt, "rmse": best_rmse}
         return self._ewma_cache
 
     # ------------------------------------------------------------------
@@ -158,7 +156,7 @@ class VolatilityCalibrator:
         # Compute EWMA log-likelihood for AIC comparison
         r = self._log_rets
         r2 = r ** 2
-        w = ewma["vol_window"]
+        w = round(ewma["vol_window_s"] / self._dt)   # seconds → steps for ewm span
         ewma_var = pd.Series(r2).ewm(span=w).mean().values
         ewma_var = np.maximum(ewma_var, 1e-20)
         ll_ewma = -0.5 * np.sum(np.log(ewma_var) + r2 / ewma_var)

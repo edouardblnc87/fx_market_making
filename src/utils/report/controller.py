@@ -8,8 +8,11 @@ from typing import Callable, Iterable, List
 from ..market_simulator.market import Market
 from ..order_book.order_book_impl import Order_book, Order
 from ..market_maker.quoter import Quoter
+from ..hft.hft_agent import HFTAgent
+from ..hft.hft_config import HFTConfig
+from ..hft.scenarios import ISOLATED, REALISTIC_MONTH, HFTState
 from .pnl_tracker import PnLTracker
-from tqdm import tqdm 
+from tqdm import tqdm
 
 class Controller:
     """
@@ -37,16 +40,32 @@ class Controller:
     ctrl.report()
     """
 
-    def __init__(self, market_B: Market, market_C: Market, book: Order_book, quoter: Quoter, client_flow_fn: Callable) -> None:
+    def __init__(self, market_B: Market, market_C: Market, book: Order_book, quoter: Quoter,
+                 client_flow_fn: Callable,
+                 hft: bool = False, hft_config: HFTConfig | None = None,
+                 hft_schedule: list | None = None) -> None:
         self.market_B = market_B
         self.market_C = market_C
         self.book = book
         self.quoter = quoter
         self.client_flow_fn = client_flow_fn
+        self.number_order = []
+        
         # Cache frequently accessed config values to avoid chained attribute lookups.
         self._dt: float = market_B.stock.time_step
         self._weight_B: float = quoter.cfg.weight_B
         self._weight_C: float = quoter.cfg.weight_C
+
+        # Phase 3 — HFT agent (None in Phase 1/2)
+        self._hft_enabled: bool = hft
+        self.hft_agent: HFTAgent | None = None
+        if hft:
+            cfg = hft_config if hft_config is not None else HFTConfig()
+            self.hft_agent = HFTAgent(market_B, market_C, book, cfg,
+                                      schedule=hft_schedule or [],
+                                      weight_B=quoter.cfg.weight_B,
+                                      weight_C=quoter.cfg.weight_C)
+            self.book.register_hft_listener(self.hft_agent.on_hft_fill)
 
         # Pre-allocated numpy arrays (set by simulate(), None until then).
         self._log_arrays: dict | None = None
@@ -76,6 +95,10 @@ class Controller:
         dt = self._dt
 
         self.book.tick(step)
+
+        # HFT reprices first (faster latency — 1 step vs our 2–4 steps)
+        if self.hft_agent is not None:
+            self.hft_agent.step(step, t)
 
         # Single call: mm_resting_orders returns the live dict reference.
         # compute_quotes reads it before we cancel/post; the same reference
@@ -135,16 +158,24 @@ class Controller:
             'fills_this_step':     np.empty(n, dtype=np.int64),
             'total_quotes_posted': np.empty(n, dtype=np.int64),
             'requote_rule':        np.empty(n, dtype=np.int8),
-            'hedge_fired':         np.zeros(n, dtype=np.int8),
+            'hft_fills_this_step': np.empty(n, dtype=np.int64),
+            'hft_state':           np.empty(n, dtype=np.int8),
         }
         self._log_ptr = 0
         self._n_fills_prev    = 0
-        self._n_quotes_posted = 0
-        self._step_log        = []
+        self._n_quotes_posted  = 0
+        self._n_hft_fills_prev = 0
+        self._step_log         = []
         # Reset quoter fill history so re-running doesn't accumulate stale entries.
         self.quoter._fill_history.clear()
         self.quoter._pending_fills.clear()
         self.quoter._pending_topups.clear()
+        if self.hft_agent is not None:
+            self.hft_agent._fill_history.clear()
+            self.hft_agent._n_fills = 0
+            self.hft_agent._inventory = 0.0
+            self.hft_agent.state = HFTState.ACTIVE
+            self.hft_agent._offline_since_t = None
 
         for s in tqdm(range(n)):
             self.step(s, s * dt)
@@ -181,6 +212,11 @@ class Controller:
         fills_this_step = n_fills_now - self._n_fills_prev
         self._n_fills_prev = n_fills_now
 
+        hft_fills_now  = self.hft_agent._n_fills if self.hft_agent is not None else 0
+        hft_fills_step = hft_fills_now - getattr(self, '_n_hft_fills_prev', 0)
+        self._n_hft_fills_prev = hft_fills_now
+        hft_state_val  = int(self.hft_agent.state) if self.hft_agent is not None else 0
+
         mid_A = (bid_A + ask_A) * 0.5 if not np.isnan(bid_A) else np.nan
 
         if self._log_arrays is not None:
@@ -201,8 +237,9 @@ class Controller:
             a['n_mm_resting'][step]        = len(self.book._mm_resting)
             a['fills_this_step'][step]     = fills_this_step
             a['total_quotes_posted'][step] = self._n_quotes_posted
-            a['requote_rule'][step]        = self.quoter._last_requote_rule
-            a['hedge_fired'][step]         = int(hedge_fired)
+            a['requote_rule'][step]        = int(getattr(self.quoter, '_last_requote_rule', 0))
+            a['hft_fills_this_step'][step] = hft_fills_step
+            a['hft_state'][step]           = hft_state_val
             self._log_ptr = step + 1
         else:
             self._step_log.append({
@@ -222,8 +259,9 @@ class Controller:
                 'n_mm_resting': len(self.book._mm_resting),
                 'fills_this_step': fills_this_step,
                 'total_quotes_posted': self._n_quotes_posted,
-                'requote_rule': self.quoter._last_requote_rule,
-                'hedge_fired': int(hedge_fired),
+                'requote_rule': int(getattr(self.quoter, '_last_requote_rule', 0)),
+                'hft_fills_this_step': hft_fills_step,
+                'hft_state': hft_state_val,
             })
 
     # Properties and report generation
@@ -477,15 +515,16 @@ class Controller:
         ax2.spines['bottom'].set_visible(False)
         ax2.tick_params(colors='#ff9500')
 
-        ax2.plot(t, s['inventory'], color='#ff9500', linewidth=0.8, label='Inventory (EUR)')
-        ax2.axhline(0, color='#555', linewidth=0.6)
+        half_K  = self.quoter.capital_K * 0.5
+        limit   = self.quoter.cfg.delta_limit * half_K
+        eur_leg = s['inventory'] + half_K
 
-        half_K = self.quoter.capital_K * 0.5
-        limit = self.quoter.cfg.delta_limit * half_K
-        ax2.axhline( limit, color='#ff4444', linewidth=0.7, linestyle='--',
-                    label=f'EUR limit ±{limit:,.0f}  ({self.quoter.cfg.delta_limit:.0%} of K/2)')
-        ax2.axhline(-limit, color='#ff4444', linewidth=0.7, linestyle='--')
-        ax2.set_ylabel('Inventory (EUR)', color='#ff9500')
+        ax2.plot(t, eur_leg, color='#ff9500', linewidth=0.8, label='EUR leg (absolute)')
+        ax2.axhline(half_K, color='#555', linewidth=0.6)
+        ax2.axhline(half_K + limit, color='#ff4444', linewidth=0.7, linestyle='--',
+                    label=f'Limits {half_K+limit:,.0f} / {half_K-limit:,.0f}  ({self.quoter.cfg.delta_limit:.0%} of K/2)')
+        ax2.axhline(half_K - limit, color='#ff4444', linewidth=0.7, linestyle='--')
+        ax2.set_ylabel('EUR leg (absolute)', color='#ff9500')
         ax2.tick_params(axis='y', colors='#ff9500')
 
         lines1, lbl1 = ax1.get_legend_handles_labels()
@@ -493,7 +532,7 @@ class Controller:
         ax1.legend(lines1 + lines2, lbl1 + lbl2,
                    facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
 
-        ax1.set_title('EUR/USD Price vs Inventory over Time', color='white', fontsize=13)
+        ax1.set_title('EUR/USD Price vs EUR Leg over Time', color='white', fontsize=13)
         ax1.set_xlabel('Time (s)', color='white')
         plt.tight_layout()
         plt.show()
@@ -775,7 +814,7 @@ class Controller:
 
         width = 68
         print("═" * width)
-        print(f"  BACKTESTING REPORT — Phase 1   ({n_days} days, dt={dt:.1f}s, {n_steps:,} steps)")
+        print(f"  BACKTESTING REPORT —  ({n_days} days, dt={dt:.1f}s, {n_steps:,} steps)")
         print("═" * width)
         print(f"  {'Total MtM P&L':<34}  {rep['total_mtm_pnl']:>+14.2f}  USD")
         print(f"  {'  Realized cash P&L':<34}  {rep['realized_pnl']:>+14.2f}  USD")
@@ -791,7 +830,10 @@ class Controller:
         print("─" * width)
         print(f"  {'MM fills':<34}  {rep['n_mm_fills']:>14,}  ({fills_per_day:,.0f}/day)")
         print(f"  {'Hedge legs':<34}  {rep['n_hedges']:>14,}")
-        print(f"  {'Final inventory':<34}  {rep['final_inventory_eur']:>14,.0f}  EUR")
+        inv    = rep['final_inventory_eur']
+        half_K = self.quoter.capital_K * 0.5
+        print(f"  {'Final EUR leg (absolute)':<34}  {half_K + inv:>14,.0f}  EUR")
+        print(f"  {'  (net delta from trading)':<34}  {inv:>+14,.0f}  EUR")
         print("─" * width)
         print(f"  {'Spread A (MM quoted, bps)':<34}  mean={spd_A.mean():.2f}  "
               f"σ={spd_A.std():.2f}  [{spd_A.min():.2f}, {spd_A.max():.2f}]")
@@ -830,3 +872,171 @@ class Controller:
                 rel = fr['fill_rate_by_level'].get(lvl, float('nan'))
                 print(f"  {lvl:<10}  {cnt:>12,.0f}  {rel:>14.3f}")
         print("═" * w)
+
+    # ── Phase 3 ───────────────────────────────────────────────────────────────
+
+    def _reset_hft(self, cfg: HFTConfig, schedule=None) -> None:
+        """Replace (or create) HFT agent with a fresh instance."""
+        self.hft_agent = HFTAgent(
+            self.market_B, self.market_C, self.book, cfg,
+            schedule=schedule or [],
+            weight_B=self.quoter.cfg.weight_B,
+            weight_C=self.quoter.cfg.weight_C,
+        )
+        self.book.register_hft_listener(self.hft_agent.on_hft_fill)
+        self._hft_enabled = True
+
+    def run_phase3(self, isolated_days: int = 3) -> None:
+        """
+        Phase 3 driver — two parts:
+
+        Part 1: isolated runs
+            For each scenario in ISOLATED, run `isolated_days` of simulation
+            and collect the step_log + trade_history.
+
+        Part 2: realistic month
+            One 30-day run with REALISTIC_MONTH schedule embedded.
+
+        Results are stored in self.phase3_isolated and self.phase3_month,
+        then passed to _plot_phase3().
+        """
+        dt = self._dt
+        steps_isolated = round(isolated_days * 86_400 / dt)
+
+        self.phase3_isolated: dict[str, tuple] = {}
+        for name, (cfg, sched) in ISOLATED.items():
+            self._reset_hft(cfg, schedule=sched)
+            self.simulate(limit=steps_isolated)
+            self.phase3_isolated[name] = (self.step_log.copy(), self.trade_history.copy())
+            print(f"[Phase 3] isolated '{name}' done — {len(self.step_log):,} steps")
+
+        # Realistic month — use default HFTConfig with schedule
+        self._reset_hft(HFTConfig(), schedule=REALISTIC_MONTH)
+        self.simulate()
+        self.phase3_month = (self.step_log.copy(), self.trade_history.copy())
+        print(f"[Phase 3] realistic month done — {len(self.step_log):,} steps")
+
+        self._plot_phase3()
+
+    def _plot_phase3(self) -> None:
+        """
+        Three-panel Phase 3 report:
+          1. P&L comparison across isolated scenarios
+          2. MM fill share vs HFT fill share by scenario
+          3. Realistic month — price + HFT state overlay
+        """
+        isolated = getattr(self, 'phase3_isolated', {})
+        month_log, month_trades = getattr(self, 'phase3_month', (pd.DataFrame(), pd.DataFrame()))
+
+        # ── Panel 1 & 2: isolated scenario comparison ────────────────────────
+        if isolated:
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            fig.patch.set_facecolor('#111111')
+            for ax in axes:
+                ax.set_facecolor('#111111')
+                ax.tick_params(colors='white')
+                ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.5, color='#444444')
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.spines['left'].set_color('#444444')
+                ax.spines['bottom'].set_color('#444444')
+
+            names, pnls, mm_shares = [], [], []
+            current_mid = self._current_fair_mid()
+            for name, (log, trades) in isolated.items():
+                names.append(name)
+                if not trades.empty:
+                    rep = PnLTracker.report(trades, current_mid)
+                    pnls.append(rep['total_mtm_pnl'])
+                    mm_fills = len(trades[~trades['is_hedge']])
+                    hft_fills = int(log['hft_fills_this_step'].sum())
+                    total = mm_fills + hft_fills
+                    mm_shares.append(mm_fills / total if total > 0 else 0.0)
+                else:
+                    pnls.append(0.0)
+                    mm_shares.append(0.0)
+
+            colors = ['#4499ff', '#00ff88', '#ff9500', '#ff4444']
+            axes[0].bar(names, pnls, color=colors[:len(names)], alpha=0.85, edgecolor='#111111')
+            axes[0].axhline(0, color='#888', linewidth=0.6)
+            axes[0].set_title('Total MtM P&L by scenario (USD)', color='white', fontsize=12)
+            axes[0].set_ylabel('P&L (USD)', color='white')
+
+            hft_shares = [1.0 - s for s in mm_shares]
+            x = np.arange(len(names))
+            axes[1].bar(x, mm_shares, label='MM fill share', color='#4499ff', alpha=0.85)
+            axes[1].bar(x, hft_shares, bottom=mm_shares, label='HFT fill share', color='#ff4444', alpha=0.85)
+            axes[1].set_xticks(x)
+            axes[1].set_xticklabels(names, color='white')
+            axes[1].set_title('Fill share: MM vs HFT by scenario', color='white', fontsize=12)
+            axes[1].set_ylabel('Fraction of total fills', color='white')
+            axes[1].legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=9)
+
+            plt.suptitle('Phase 3 — Isolated scenario comparison', color='white', fontsize=13)
+            plt.tight_layout()
+            plt.show()
+
+        # ── Panel 3: realistic month — price + HFT state timeline ────────────
+        if not month_log.empty:
+            s = self._ds(month_log)
+            t_days = s['t'] / 86_400.0
+
+            state_labels = {0: 'ACTIVE', 1: 'ONE_SIDED_BID', 2: 'ONE_SIDED_ASK', 3: 'OFFLINE'}
+            state_colors = {0: '#00ff88', 1: '#ffcc00', 2: '#ff9500', 3: '#ff4444'}
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
+            fig.patch.set_facecolor('#111111')
+            for ax in (ax1, ax2):
+                ax.set_facecolor('#111111')
+                ax.tick_params(colors='white')
+                ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.4, color='#444444')
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.spines['left'].set_color('#444444')
+                ax.spines['bottom'].set_color('#444444')
+
+            ax1.plot(t_days, s['fair_mid'], color='#ffcc00', linewidth=0.8)
+            ax1.set_ylabel('EUR/USD fair mid', color='#ffcc00')
+            ax1.tick_params(axis='y', colors='#ffcc00')
+            ax1.set_title('Realistic month — EUR/USD price with HFT state overlay', color='white', fontsize=12)
+
+            # Shade background by HFT state
+            state_arr = s['hft_state'].values
+            t_arr = t_days.values
+            for st_val, st_color in state_colors.items():
+                mask = state_arr == st_val
+                if mask.any():
+                    ax1.fill_between(t_arr, ax1.get_ylim()[0], ax1.get_ylim()[1],
+                                     where=mask, alpha=0.08, color=st_color,
+                                     label=state_labels[st_val])
+
+            ax1.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8, loc='upper left')
+
+            ax2.plot(t_days, s['hft_state'], color='#4499ff', linewidth=0.7, drawstyle='steps-post')
+            ax2.set_yticks([0, 1, 2, 3])
+            ax2.set_yticklabels(['ACTIVE', 'ONE_SIDED_BID', 'ONE_SIDED_ASK', 'OFFLINE'], color='white', fontsize=8)
+            ax2.set_ylabel('HFT state', color='white')
+            ax2.set_xlabel('Time (days)', color='white')
+            ax2.set_title('HFT state timeline', color='white', fontsize=12)
+
+            plt.tight_layout()
+            plt.show()
+
+            # Summary: our fill rate by HFT state
+            w = 68
+            print("═" * w)
+            print("  PHASE 3 — REALISTIC MONTH SUMMARY")
+            print("═" * w)
+            for st_val, st_name in state_labels.items():
+                mask = month_log['hft_state'] == st_val
+                n_steps_st = mask.sum()
+                mm_fills_st = month_log.loc[mask, 'fills_this_step'].sum()
+                hft_fills_st = month_log.loc[mask, 'hft_fills_this_step'].sum()
+                total_st = mm_fills_st + hft_fills_st
+                share = mm_fills_st / total_st if total_st > 0 else float('nan')
+                pct_time = n_steps_st / len(month_log) * 100
+                print(f"  {st_name:<20}  {pct_time:>5.1f}% time  "
+                      f"MM fills={mm_fills_st:>6,}  HFT fills={hft_fills_st:>6,}  "
+                      f"MM share={share:.1%}" if not np.isnan(share) else
+                      f"  {st_name:<20}  {pct_time:>5.1f}% time  no fills")
+            print("═" * w)
