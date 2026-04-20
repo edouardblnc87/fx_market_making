@@ -265,9 +265,10 @@ def run_sim(stock, market_B, market_C, quoter_config,
         hedge_idx = set()
     sample_idx = sorted(uniform_idx | hedge_idx)
     return {
-        "fill_history":    mm._fill_history,
-        "inventory":       mm.inventory,
-        "step_log_sample": sl.iloc[sample_idx].to_dict("records"),
+        "fill_history":      mm._fill_history,
+        "inventory":         mm.inventory,
+        "step_log_sample":   sl.iloc[sample_idx].to_dict("records"),
+        "n_quotes_posted":   ctrl._n_quotes_posted,
     }
 
 
@@ -303,6 +304,7 @@ def restore_ctrl(state: dict, market_B, market_C, quoter_config, capital: float,
     mm._fill_history       = state["fill_history"]
     mm.inventory           = state["inventory"]
     ctrl._step_log         = state["step_log_sample"]
+    ctrl._n_quotes_posted  = state.get("n_quotes_posted", 0)
 
     return ctrl, mm, book
 

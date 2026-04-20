@@ -126,33 +126,39 @@ class Controller:
 
         self._log_step(step, t, best_bid_A, best_ask_A, hedge_fired)
 
+    _LOG_MAX_PTS: int = 5000   # cap on log rows — keeps memory under ~30 MB
+
     def simulate(self, limit: int | None = None) -> None:
         """Run the full simulation from step 0 to n_steps − 1."""
         n  = limit if limit is not None else self.market_B.stock.n_steps
         dt = self._dt
 
+        # Cap log rows to avoid OOM on long simulations (e.g. 30 days × 24 h × 0.05 s = 51 M steps).
+        # Only write every _log_stride-th step; fills are always accumulated regardless.
+        self._log_stride = max(1, n // self._LOG_MAX_PTS)
+        n_rows = (n + self._log_stride - 1) // self._log_stride
+
         # Pre-allocate contiguous numpy arrays for the step log.
-        # Writing by index is ~10× faster than appending dicts to a list.
         self._log_arrays = {
-            'step':                np.empty(n, dtype=np.int64),
-            't':                   np.empty(n),
-            'bid_A':               np.empty(n),
-            'ask_A':               np.empty(n),
-            'mid_A':               np.empty(n),
-            'bid_B':               np.empty(n),
-            'ask_B':               np.empty(n),
-            'mid_B':               np.empty(n),
-            'bid_C':               np.empty(n),
-            'ask_C':               np.empty(n),
-            'mid_C':               np.empty(n),
-            'fair_mid':            np.empty(n),
-            'inventory':           np.empty(n),
-            'n_mm_resting':        np.empty(n, dtype=np.int64),
-            'fills_this_step':     np.empty(n, dtype=np.int64),
-            'total_quotes_posted': np.empty(n, dtype=np.int64),
-            'requote_rule':        np.empty(n, dtype=np.int8),
-            'hft_fills_this_step': np.empty(n, dtype=np.int64),
-            'hft_state':           np.empty(n, dtype=np.int8),
+            'step':                np.empty(n_rows, dtype=np.int64),
+            't':                   np.empty(n_rows),
+            'bid_A':               np.empty(n_rows),
+            'ask_A':               np.empty(n_rows),
+            'mid_A':               np.empty(n_rows),
+            'bid_B':               np.empty(n_rows),
+            'ask_B':               np.empty(n_rows),
+            'mid_B':               np.empty(n_rows),
+            'bid_C':               np.empty(n_rows),
+            'ask_C':               np.empty(n_rows),
+            'mid_C':               np.empty(n_rows),
+            'fair_mid':            np.empty(n_rows),
+            'inventory':           np.empty(n_rows),
+            'n_mm_resting':        np.empty(n_rows, dtype=np.int64),
+            'fills_this_step':     np.empty(n_rows, dtype=np.int64),
+            'total_quotes_posted': np.empty(n_rows, dtype=np.int64),
+            'requote_rule':        np.empty(n_rows, dtype=np.int8),
+            'hft_fills_this_step': np.empty(n_rows, dtype=np.int64),
+            'hft_state':           np.empty(n_rows, dtype=np.int8),
         }
         self._log_ptr = 0
         self._n_fills_prev    = 0
@@ -202,39 +208,50 @@ class Controller:
         fair_mid = self._weight_B * mid_B + self._weight_C * mid_C
 
         n_fills_now = len(self.quoter._fill_history)
-        fills_this_step = n_fills_now - self._n_fills_prev
-        self._n_fills_prev = n_fills_now
-
         hft_fills_now  = self.hft_agent._n_fills if self.hft_agent is not None else 0
-        hft_fills_step = hft_fills_now - getattr(self, '_n_hft_fills_prev', 0)
-        self._n_hft_fills_prev = hft_fills_now
         hft_state_val  = int(self.hft_agent.state) if self.hft_agent is not None else 0
-
         mid_A = (bid_A + ask_A) * 0.5 if not np.isnan(bid_A) else np.nan
 
+        stride = getattr(self, '_log_stride', 1)
+
         if self._log_arrays is not None:
+            # Only write every stride-th step to keep the log small in memory.
+            # fills_this_step accumulates across skipped steps so no fills are lost.
+            if step % stride != 0:
+                return
+            # Accumulate fills since the last written log entry (covers all skipped steps).
+            fills_since_last_log     = n_fills_now    - self._n_fills_prev
+            hft_fills_since_last_log = hft_fills_now  - getattr(self, '_n_hft_fills_prev', 0)
+            self._n_fills_prev       = n_fills_now
+            self._n_hft_fills_prev   = hft_fills_now
+
+            ptr = self._log_ptr
             a = self._log_arrays
-            a['step'][step]                = step
-            a['t'][step]                   = t
-            a['bid_A'][step]               = bid_A
-            a['ask_A'][step]               = ask_A
-            a['mid_A'][step]               = mid_A
-            a['bid_B'][step]               = bid_B
-            a['ask_B'][step]               = ask_B
-            a['mid_B'][step]               = mid_B
-            a['bid_C'][step]               = bid_C
-            a['ask_C'][step]               = ask_C
-            a['mid_C'][step]               = mid_C
-            a['fair_mid'][step]            = fair_mid
-            a['inventory'][step]           = self.quoter.inventory
-            a['n_mm_resting'][step]        = len(self.book._mm_resting)
-            a['fills_this_step'][step]     = fills_this_step
-            a['total_quotes_posted'][step] = self._n_quotes_posted
-            a['requote_rule'][step]        = int(getattr(self.quoter, '_last_requote_rule', 0))
-            a['hft_fills_this_step'][step] = hft_fills_step
-            a['hft_state'][step]           = hft_state_val
-            self._log_ptr = step + 1
+            a['step'][ptr]                = step
+            a['t'][ptr]                   = t
+            a['bid_A'][ptr]               = bid_A
+            a['ask_A'][ptr]               = ask_A
+            a['mid_A'][ptr]               = mid_A
+            a['bid_B'][ptr]               = bid_B
+            a['ask_B'][ptr]               = ask_B
+            a['mid_B'][ptr]               = mid_B
+            a['bid_C'][ptr]               = bid_C
+            a['ask_C'][ptr]               = ask_C
+            a['mid_C'][ptr]               = mid_C
+            a['fair_mid'][ptr]            = fair_mid
+            a['inventory'][ptr]           = self.quoter.inventory
+            a['n_mm_resting'][ptr]        = len(self.book._mm_resting)
+            a['fills_this_step'][ptr]     = fills_since_last_log
+            a['total_quotes_posted'][ptr] = self._n_quotes_posted
+            a['requote_rule'][ptr]        = int(getattr(self.quoter, '_last_requote_rule', 0))
+            a['hft_fills_this_step'][ptr] = hft_fills_since_last_log
+            a['hft_state'][ptr]           = hft_state_val
+            self._log_ptr = ptr + 1
         else:
+            fills_this_step  = n_fills_now   - self._n_fills_prev
+            hft_fills_step   = hft_fills_now - getattr(self, '_n_hft_fills_prev', 0)
+            self._n_fills_prev       = n_fills_now
+            self._n_hft_fills_prev   = hft_fills_now
             self._step_log.append({
                 'step': step,
                 't': t,
@@ -293,6 +310,17 @@ class Controller:
         return PnLTracker.report(df, self._current_fair_mid())
 
     # Backtesting report
+
+    @staticmethod
+    def _fmt_days(t_seconds: float) -> str:
+        """Human-readable duration: auto-switches between days / hours / minutes."""
+        d = t_seconds / 86_400.0
+        if d >= 1.0:
+            return f"{d:.3g} days"
+        h = t_seconds / 3_600.0
+        if h >= 1.0:
+            return f"{h:.3g} hours"
+        return f"{t_seconds / 60.0:.3g} min"
 
     @staticmethod
     def _ds(log: pd.DataFrame, max_pts: int = 2000) -> pd.DataFrame:
@@ -382,8 +410,8 @@ class Controller:
         ax4.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8,
                    loc='upper right')
 
-        n_days = round(log['t'].iloc[-1] / 86400, 1) if len(log) > 1 else '?'
-        plt.suptitle(f'Bid / Ask / Mid — All Markets  ({n_days} days)',
+        _dur = self._fmt_days(float(log['t'].iloc[-1])) if len(log) > 1 else '?'
+        plt.suptitle(f'Bid / Ask / Mid — All Markets  ({_dur})',
                      color='white', fontsize=14, y=1.005)
         plt.tight_layout()
         plt.show()
@@ -788,9 +816,13 @@ class Controller:
         plt.tight_layout()
         plt.show()
 
-    def report(self) -> None:
+    def report(self, phase: int | str | None = None) -> None:
         """
         Generate the full backtesting report.
+
+        Parameters
+        ----------
+        phase : optional label shown in the report header (e.g. 1, 2, "2 calibrated").
 
         Prints the P&L summary, then renders all five plots:
           1. Market quotes for A, B, C
@@ -808,11 +840,12 @@ class Controller:
         current_mid = self._current_fair_mid()
         rep = PnLTracker.report(df, current_mid)
 
-        log = self.step_log
-        n_days = round(log['t'].iloc[-1] / 86400, 1) if len(log) > 1 else '?'
-        n_steps = len(log)
+        log    = self.step_log
+        t_last = float(log['t'].iloc[-1]) if len(log) > 1 else 0.0
+        n_days = t_last / 86_400.0
         dt = self.market_B.stock.time_step
-        fills_per_day = rep['n_mm_fills'] / max(float(n_days), 1e-9)
+        n_steps = round(t_last / dt) + 1 if dt > 0 else len(log)
+        fills_per_day = rep['n_mm_fills'] / max(n_days, 1e-9)
 
         # Spread diagnostics from step log
         spd_A = (log['ask_A'] - log['bid_A']) / log['mid_A'] * 1e4
@@ -820,8 +853,9 @@ class Controller:
         spd_C = (log['ask_C'] - log['bid_C']) / log['mid_C'] * 1e4
 
         width = 68
+        phase_str = f"Phase {phase} — " if phase is not None else ""
         print("═" * width)
-        print(f"  BACKTESTING REPORT —  ({n_days} days, dt={dt:.1f}s, {n_steps:,} steps)")
+        print(f"  {phase_str}BACKTESTING REPORT —  ({self._fmt_days(t_last)}, dt={dt:.6g}s, {n_steps:,} steps)")
         print("═" * width)
         print(f"  {'Total MtM P&L':<34}  {rep['total_mtm_pnl']:>+14.2f}  USD")
         print(f"  {'  Realized cash P&L':<34}  {rep['realized_pnl']:>+14.2f}  USD")
@@ -905,9 +939,16 @@ class Controller:
         print("═" * w)
         print("  HFT AGENT — ACTIVITY SUMMARY")
         print("═" * w)
+        mm_trades   = trades[~trades['is_hedge']] if not trades.empty else trades
+        mm_avg_size = float(mm_trades['size'].mean()) if len(mm_trades) else 0.0
+        dt          = self.market_B.stock.time_step
+        t_last_hft  = float(log['t'].iloc[-1]) if len(log) > 1 else 0.0
+        n_days_val  = t_last_hft / 86_400.0
+
         mm_share  = mm_fills  / total if total > 0 else float('nan')
         hft_share = hft_fills / total if total > 0 else float('nan')
         print(f"  {'MM fills':<34}  {mm_fills:>8,}  ({mm_share:>6.1%} of total)")
+        print(f"  {'MM avg fill size (EUR)':<34}  {mm_avg_size:>14,.0f}")
         print(f"  {'HFT fills':<34}  {hft_fills:>8,}  ({hft_share:>6.1%} of total)")
         print(f"  {'HFT avg fill size (EUR)':<34}  {hft_avg_size:>14,.0f}")
         print("─" * w)
@@ -918,13 +959,18 @@ class Controller:
         print(f"  {'  trend_threshold_bps':<34}  {cfg.trend_threshold_bps:.2f} bps  "
               f"window={cfg.trend_window_s:.1f}s")
         print("─" * w)
-        print(f"  {'HFT state breakdown':}")
+        print(f"  {'HFT state breakdown — MM perspective':}")
+        print(f"  {'':20}  {'%time':>6}  {'MM fills':>10}  {'HFT fills':>10}  {'MM share':>9}")
         for sv, sn in state_names.items():
             mask         = log['hft_state'] == sv
             n_st         = int(mask.sum())
             pct          = n_st / n_total * 100 if n_total > 0 else 0.0
-            fills_in_st  = int(log.loc[mask, 'hft_fills_this_step'].sum())
-            print(f"  {sn:<20}  {pct:>5.1f}% of steps   HFT fills={fills_in_st:>6,}")
+            mm_fills_st  = int(log.loc[mask, 'fills_this_step'].sum())
+            hft_fills_st = int(log.loc[mask, 'hft_fills_this_step'].sum())
+            total_st     = mm_fills_st + hft_fills_st
+            mm_share_st  = mm_fills_st / total_st if total_st > 0 else float('nan')
+            print(f"  {sn:<20}  {pct:>5.1f}%  {mm_fills_st:>10,}  {hft_fills_st:>10,}  "
+                  f"{mm_share_st:>8.0%}")
         print("═" * w)
 
         # ── Plot 1: fill-share bar (MM vs HFT) ───────────────────────────────
@@ -956,8 +1002,7 @@ class Controller:
             if not np.isnan(v):
                 axes[1].text(i, v + 0.01, f'{v:.1%}', ha='center', color='white', fontsize=9)
 
-        n_days_val = round(log['t'].iloc[-1] / 86400, 1) if len(log) > 1 else '?'
-        plt.suptitle(f'HFT vs MM fill share  ({n_days_val} days)',
+        plt.suptitle(f'HFT vs MM fill share  ({self._fmt_days(t_last_hft)})',
                      color='white', fontsize=13)
         plt.tight_layout()
         plt.show()
@@ -991,7 +1036,25 @@ class Controller:
                 ax1.fill_between(t_axis.values, ylim[0], ylim[1],
                                  where=mask, alpha=0.09, color=sc,
                                  label=state_names[sv])
-        ax1.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8)
+
+        # Cumulative MM fills on right axis — shows fill rate slowdown when HFT goes offline
+        cum_fills = log['fills_this_step'].cumsum()
+        t_full = log['t'] / (86_400.0 if float(log['t'].iloc[-1]) > 86_400 else 3_600.0)
+        ax1r = ax1.twinx()
+        ax1r.plot(t_full, cum_fills, color='#4499ff', linewidth=0.8,
+                  alpha=0.85, label='Cumulative MM fills')
+        ax1r.set_ylabel('Cumulative MM fills', color='#4499ff', fontsize=8)
+        ax1r.tick_params(axis='y', colors='#4499ff')
+        ax1r.set_facecolor('#111111')
+        ax1r.spines['right'].set_color('#4499ff')
+        ax1r.spines['top'].set_visible(False)
+        ax1r.spines['left'].set_visible(False)
+        ax1r.spines['bottom'].set_visible(False)
+
+        handles1, labels1 = ax1.get_legend_handles_labels()
+        handles2, labels2 = ax1r.get_legend_handles_labels()
+        ax1.legend(handles1 + handles2, labels1 + labels2,
+                   facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8)
 
         ax2.plot(t_axis, s['hft_state'], color='#4499ff', linewidth=0.6,
                  drawstyle='steps-post')
@@ -1001,6 +1064,221 @@ class Controller:
         ax2.set_ylabel('HFT state', color='white')
         ax2.set_xlabel(x_label, color='white')
         ax2.set_title('HFT state timeline', color='white', fontsize=12)
+        plt.tight_layout()
+        plt.show()
+
+        # ── Plot 3: Spread width by HFT state ────────────────────────────────
+        spd_bps = ((log['ask_A'] - log['bid_A'])
+                   / log['mid_A'].replace(0, np.nan) * 1e4).values
+        spd_s   = self._ds(log)
+        spd_ds  = ((spd_s['ask_A'] - spd_s['bid_A'])
+                   / spd_s['mid_A'].replace(0, np.nan) * 1e4).values
+
+        state_labels_list = ['ACTIVE', 'ONE_SIDED_BID', 'ONE_SIDED_ASK', 'OFFLINE']
+
+        fig3, (ax_ts, ax_bx) = plt.subplots(
+            1, 2, figsize=(14, 4),
+            gridspec_kw={'width_ratios': [3, 1]},
+        )
+        fig3.patch.set_facecolor('#111111')
+        fig3.suptitle('Quoted spread width by HFT state', color='white', fontsize=12)
+        for ax in (ax_ts, ax_bx):
+            ax.set_facecolor('#111111')
+            ax.tick_params(colors='white')
+            ax.grid(True, linestyle='--', linewidth=0.4, alpha=0.4, color='#444444')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_color('#444444')
+            ax.spines['bottom'].set_color('#444444')
+
+        # Time series panel
+        ax_ts.plot(t_axis, spd_ds, color='#ffa657', linewidth=0.7, label='Spread A (bps)')
+        ylim_spd = ax_ts.get_ylim()
+        for sv, sc in state_colors.items():
+            mask = s['hft_state'].values == sv
+            if mask.any():
+                ax_ts.fill_between(t_axis.values, ylim_spd[0], ylim_spd[1],
+                                   where=mask, alpha=0.09, color=sc,
+                                   label=state_names[sv])
+        ax_ts.set_ylabel('Spread (bps)', color='white')
+        ax_ts.set_xlabel(x_label, color='white')
+        ax_ts.set_title('Spread over time', color='white', fontsize=10)
+        ax_ts.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8)
+
+        # Box plot per state
+        box_data   = []
+        box_labels = []
+        box_colors_list = []
+        for sv in range(4):
+            mask = log['hft_state'].values == sv
+            vals = spd_bps[mask]
+            vals = vals[np.isfinite(vals)]
+            if len(vals):
+                box_data.append(vals)
+                box_labels.append(state_labels_list[sv])
+                box_colors_list.append(state_colors[sv])
+
+        bp = ax_bx.boxplot(
+            box_data, patch_artist=True, widths=0.5,
+            medianprops=dict(color='white', linewidth=1.5),
+            whiskerprops=dict(color='#888888'),
+            capprops=dict(color='#888888'),
+            flierprops=dict(marker='.', color='#888888', markersize=2, alpha=0.4),
+        )
+        for patch, color in zip(bp['boxes'], box_colors_list):
+            patch.set_facecolor(color + '44')
+            patch.set_edgecolor(color)
+        ax_bx.set_xticks(range(1, len(box_labels) + 1))
+        ax_bx.set_xticklabels(box_labels, color='white', fontsize=7, rotation=15, ha='right')
+        ax_bx.set_ylabel('Spread (bps)', color='white')
+        ax_bx.set_title('Distribution per state', color='white', fontsize=10)
+
+        # Annotate mean per box
+        for i, (vals, color) in enumerate(zip(box_data, box_colors_list)):
+            ax_bx.text(i + 1, float(np.nanmean(vals)),
+                       f'{np.nanmean(vals):.2f}',
+                       ha='center', va='bottom', fontsize=7, color=color)
+
+        plt.tight_layout()
+        plt.show()
+
+        # ── Plot A: Cumulative MM inception P&L by HFT state ─────────────────
+        from .pnl_tracker import PnLTracker
+        if not trades.empty:
+            mm_tr = trades[~trades['is_hedge']].copy().sort_values('t')
+            # Per-fill inception spread
+            inc = np.where(
+                mm_tr['direction'] == 'sell',
+                (mm_tr['price'] - mm_tr['fair_mid']) * mm_tr['size'],
+                (mm_tr['fair_mid'] - mm_tr['price']) * mm_tr['size'],
+            )
+            mm_tr['cum_inception'] = np.cumsum(inc)
+
+            fig_a, ax_a = plt.subplots(figsize=(14, 4))
+            fig_a.patch.set_facecolor('#111111')
+            ax_a.set_facecolor('#111111')
+            ax_a.tick_params(colors='white')
+            ax_a.grid(True, linestyle='--', linewidth=0.4, alpha=0.4, color='#444444')
+            for sp in ['top', 'right']: ax_a.spines[sp].set_visible(False)
+            for sp in ['left', 'bottom']: ax_a.spines[sp].set_color('#444444')
+
+            # HFT state shading — use step_log time grid
+            t_fill_norm = mm_tr['t'] / (86_400.0 if float(log['t'].iloc[-1]) > 86_400 else 3_600.0)
+            ylim_a = (float(mm_tr['cum_inception'].min()) * 1.1,
+                      float(mm_tr['cum_inception'].max()) * 1.1)
+            for sv, sc in state_colors.items():
+                mask_st = s['hft_state'].values == sv
+                if mask_st.any():
+                    ax_a.fill_between(t_axis.values, ylim_a[0], ylim_a[1],
+                                      where=mask_st, alpha=0.09, color=sc,
+                                      label=state_names[sv])
+            ax_a.plot(t_fill_norm, mm_tr['cum_inception'],
+                      color='#ffcc00', linewidth=0.9, label='Cumul. inception P&L', zorder=3)
+            ax_a.axhline(0, color='#444444', linewidth=0.6)
+            ax_a.set_ylabel('USD', color='white')
+            ax_a.set_xlabel(x_label, color='white')
+            ax_a.set_title('Cumulative MM inception P&L  —  shaded by HFT state',
+                           color='white', fontsize=12)
+            ax_a.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8)
+            plt.tight_layout()
+            plt.show()
+
+        # ── Plot B: Rolling MM fill rate over time by HFT state ──────────────
+        window_steps = max(1, int(600 / dt))   # 10-min rolling window
+        fills_hr = (log['fills_this_step']
+                    .rolling(window_steps, min_periods=1).mean() / dt * 3600)
+        fills_hr_ds = fills_hr.iloc[::max(1, len(log) // 3000)]
+        t_fr = log['t'].iloc[::max(1, len(log) // 3000)] / (
+            86_400.0 if float(log['t'].iloc[-1]) > 86_400 else 3_600.0)
+
+        fig_b, ax_b = plt.subplots(figsize=(14, 4))
+        fig_b.patch.set_facecolor('#111111')
+        ax_b.set_facecolor('#111111')
+        ax_b.tick_params(colors='white')
+        ax_b.grid(True, linestyle='--', linewidth=0.4, alpha=0.4, color='#444444')
+        for sp in ['top', 'right']: ax_b.spines[sp].set_visible(False)
+        for sp in ['left', 'bottom']: ax_b.spines[sp].set_color('#444444')
+
+        ylim_b = (0, float(fills_hr_ds.max()) * 1.15)
+        for sv, sc in state_colors.items():
+            mask_st = s['hft_state'].values == sv
+            if mask_st.any():
+                ax_b.fill_between(t_axis.values, ylim_b[0], ylim_b[1],
+                                  where=mask_st, alpha=0.09, color=sc,
+                                  label=state_names[sv])
+        ax_b.plot(t_fr.values, fills_hr_ds.values,
+                  color='#4499ff', linewidth=0.8, label='Rolling fill rate', zorder=3)
+        ax_b.set_ylim(ylim_b)
+        ax_b.set_ylabel('MM fills / hour', color='white')
+        ax_b.set_xlabel(x_label, color='white')
+        ax_b.set_title('Rolling MM fill rate (10-min window)  —  shaded by HFT state',
+                       color='white', fontsize=12)
+        ax_b.legend(facecolor='#222222', edgecolor='#444444', labelcolor='white', fontsize=8)
+        plt.tight_layout()
+        plt.show()
+
+        # ── Plot C: Per-state comparison (fill rate / spread / inception P&L) ─
+        state_labels_list = ['ACTIVE', 'ONE_SIDED_BID', 'ONE_SIDED_ASK', 'OFFLINE']
+        per_state = {sv: {} for sv in range(4)}
+        spd_bps_full = ((log['ask_A'] - log['bid_A'])
+                        / log['mid_A'].replace(0, np.nan) * 1e4).values
+
+        for sv in range(4):
+            mask = log['hft_state'].values == sv
+            n_st = int(mask.sum())
+            mm_st  = int(log['fills_this_step'].values[mask].sum())
+            t_st   = n_st * dt / 3600.0   # hours in this state
+            per_state[sv]['fill_rate'] = mm_st / t_st if t_st > 0 else 0.0
+            per_state[sv]['spread']    = float(np.nanmean(spd_bps_full[mask])) if mask.any() else 0.0
+            per_state[sv]['pct']       = n_st / n_total * 100 if n_total > 0 else 0.0
+
+        # Inception P&L per state: map each fill's state from step_log
+        if not trades.empty:
+            fill_log = pd.merge_asof(
+                mm_tr[['t', 'cum_inception']].assign(
+                    inc_per_fill=np.concatenate([[mm_tr['cum_inception'].iloc[0]],
+                                                 np.diff(mm_tr['cum_inception'].values)])),
+                log[['t', 'hft_state']].sort_values('t'),
+                on='t', direction='backward',
+            )
+            for sv in range(4):
+                per_state[sv]['pnl'] = float(
+                    fill_log.loc[fill_log['hft_state'] == sv, 'inc_per_fill'].sum())
+        else:
+            for sv in range(4):
+                per_state[sv]['pnl'] = 0.0
+
+        present = [sv for sv in range(4) if per_state[sv]['pct'] > 0]
+        labels_c  = [state_labels_list[sv] for sv in present]
+        colors_c  = [state_colors[sv] for sv in present]
+
+        fig_c, axes_c = plt.subplots(1, 3, figsize=(14, 4))
+        fig_c.patch.set_facecolor('#111111')
+        fig_c.suptitle('MM metrics per HFT state', color='white', fontsize=12)
+        subtitles = ['Avg fill rate (fills/hour)', 'Avg spread (bps)', 'Total inception P&L (USD)']
+        keys      = ['fill_rate', 'spread', 'pnl']
+
+        for ax_c, key, subtitle in zip(axes_c, keys, subtitles):
+            ax_c.set_facecolor('#111111')
+            ax_c.tick_params(colors='white')
+            ax_c.grid(True, linestyle='--', linewidth=0.4, alpha=0.4, color='#444444',
+                      axis='y')
+            for sp in ['top', 'right']: ax_c.spines[sp].set_visible(False)
+            for sp in ['left', 'bottom']: ax_c.spines[sp].set_color('#444444')
+
+            vals = [per_state[sv][key] for sv in present]
+            bars = ax_c.bar(labels_c, vals,
+                            color=[c + 'bb' for c in colors_c],
+                            edgecolor=colors_c)
+            ax_c.set_title(subtitle, color='white', fontsize=10)
+            ax_c.set_xticklabels(labels_c, color='white', fontsize=7,
+                                 rotation=15, ha='right')
+            for bar, v in zip(bars, vals):
+                ax_c.text(bar.get_x() + bar.get_width() / 2,
+                          bar.get_height() * 1.01,
+                          f'{v:,.1f}', ha='center', va='bottom',
+                          fontsize=7.5, color='white')
+
         plt.tight_layout()
         plt.show()
 

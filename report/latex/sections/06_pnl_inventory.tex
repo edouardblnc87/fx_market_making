@@ -1,0 +1,78 @@
+\section{Inventory and P\&L Tracking}
+\label{sec:pnl}
+
+Every fill on $A$ and every hedge leg on $B$/$C$ is appended to a
+single trade log with columns $(t, \mathrm{side}, p, x, m^{\text{fair}}, \mathrm{cf}, \phi, \mathrm{is\_hedge}, q_{\text{after}})$,
+where $\mathrm{cf}$ is the signed USD cash-flow and $\phi$ the fee
+paid on that leg. All P\&L figures reported in the backtest
+(Section~\ref{sec:backtest}) are derived from this log.
+\subsection{Sign and fee convention}
+
+Cash-flows are signed from the market-maker's perspective in USD:
+positive when cash flows in, negative when it flows out. For a sell
+fill on $A$ at price $p$ and size $x$ (EUR), the cash-flow is
+$+p\,x\,(1 - \phi_A^{\text{mak}})$; for a buy fill it is
+$-p\,x\,(1 + \phi_A^{\text{mak}})$. Hedge legs cross the opposite
+side on $B$ or $C$ and pay the corresponding taker fee. Fees are
+therefore \emph{already embedded} in $\mathrm{cf}$. We log $\phi$
+separately only to isolate the fee line in the decomposition below
+--- it is not subtracted a second time.
+
+\subsection{Realized versus mark-to-market}
+
+At any time $t$ we split the total economic P\&L into what is
+locked in and what remains at risk:
+\begin{equation}
+  \mathrm{MtM}_t \;=\; \underbrace{\sum_{i:\,t_i \le t} \mathrm{cf}_i}_{\text{realized}}
+                 \;+\; \underbrace{q_t \cdot m^{\text{fair}}_t}_{\text{unrealized}},
+  \label{eq:mtm-split}
+\end{equation}
+where $q_t$ is the open EUR inventory after the last fill and
+$m^{\text{fair}}_t$ is the cross-venue fair mid of
+Section~\ref{sec:quoter-mid}. Valuing inventory at the fair mid
+rather than at $A$'s own noised mid removes the venue-specific
+microstructure noise from the valuation: the unrealized line reflects
+only the economic value of the EUR position, not the idiosyncratic
+distortion of the venue on which it sits.
+
+\subsection{Inception spread versus mid-to-mid revaluation}
+
+Equation~\eqref{eq:mtm-split} separates \emph{what is settled} from
+\emph{what is still open}, but it does not say \emph{why} the P\&L
+got to its current value. For that we use a second, orthogonal,
+decomposition:
+\begin{equation}
+  \mathrm{MtM}_t \;=\;
+  \underbrace{\sum_{i \in \mathcal{M},\,t_i \le t} s_i\,(p_i - m^{\text{fair}}_{t_i})\,|x_i|}_{\text{inception spread } \mathcal{S}_t}
+  \;+\;
+  \underbrace{\mathrm{Reval}_t}_{\text{mid-to-mid revaluation}}
+  \;-\;
+  \underbrace{\mathcal{F}_t}_{\text{fees}},
+  \label{eq:inception-reval}
+\end{equation}
+with $\mathcal{M}$ the set of MM fills on $A$ (hedge legs excluded),
+$s_i = +1$ for a sell and $-1$ for a buy, and
+$\mathcal{F}_t = \sum_{i \le t}|\phi_i|$ the cumulative fees.
+$\mathcal{S}_t$ is the spread we captured \emph{at the moment} of
+each fill --- it is the pure market-making edge, measured before any
+subsequent market move. $\mathrm{Reval}_t$ is the residual, defined
+by \eqref{eq:inception-reval}, and isolates the P\&L generated purely
+by $m^{\text{fair}}$ drifting after a fill on the open position it
+left us with; it is a directional, non-market-making component.
+This is precisely the distinction between inception spread and
+mid-to-mid revaluation that the brief asks for.
+
+\subsection{Continuous MtM and final inventory}
+
+Evaluating \eqref{eq:mtm-split} only at fill events gives a sparse
+view. For the backtest report we reconstruct MtM on the full
+simulation grid: the cumulative cash, fees, and inception spread
+columns are forward-filled onto every step, and residual inventory
+is marked at the concurrent fair mid. This yields a continuous curve
+plotted alongside the discrete realized-cash ladder in
+Section~\ref{sec:backtest} and makes the mid-to-mid revaluation
+component visible between fills, not just at them. At horizon $T$ we
+close the run with the triple $(\text{realized}_T,\, q_T \cdot m^{\text{fair}}_T,\, q_T)$:
+the first is the locked-in USD P\&L, the second is the final
+inventory value in USD --- the mark at which we would liquidate the
+remaining EUR --- and the third is the raw EUR position we carry out.

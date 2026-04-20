@@ -1,0 +1,60 @@
+\begin{thebibliography}{8}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Avellaneda and Stoikov(2008)]{avellaneda2008high}
+Marco Avellaneda and Sasha Stoikov.
+\newblock High-frequency trading in a limit order book.
+\newblock \emph{Quantitative Finance}, 8\penalty0 (3):\penalty0 217--224, 2008.
+
+\bibitem[Biais et~al.(1995)Biais, Hillion, and Spatt]{biais1995empirical}
+Bruno Biais, Pierre Hillion, and Chester Spatt.
+\newblock An empirical analysis of the limit order book and the order flow in
+  the {Paris} bourse.
+\newblock \emph{The Journal of Finance}, 50\penalty0 (5):\penalty0 1655--1689,
+  1995.
+
+\bibitem[Cont et~al.(2014)Cont, Kukanov, and Stoikov]{cont2014price}
+Rama Cont, Arseniy Kukanov, and Sasha Stoikov.
+\newblock The price impact of order book events.
+\newblock \emph{Journal of Financial Econometrics}, 12\penalty0 (1):\penalty0
+  47--88, 2014.
+
+\bibitem[Engle and Patton(2004)]{engle2004impacts}
+Robert~F. Engle and Andrew~J. Patton.
+\newblock Impacts of trades in an error-correction model of quote prices.
+\newblock \emph{Journal of Financial Markets}, 7\penalty0 (1):\penalty0 1--25,
+  2004.
+
+\bibitem[Gabaix et~al.(2003)Gabaix, Gopikrishnan, Plerou, and
+  Stanley]{gabaix2003theory}
+Xavier Gabaix, Parameswaran Gopikrishnan, Vasiliki Plerou, and H.~Eugene
+  Stanley.
+\newblock A theory of power-law distributions in financial market fluctuations.
+\newblock \emph{Nature}, 423\penalty0 (6937):\penalty0 267--270, 2003.
+
+\bibitem[Gu{\'e}ant(2017)]{gueant2017optimal}
+Olivier Gu{\'e}ant.
+\newblock Optimal market making.
+\newblock \emph{Applied Mathematical Finance}, 24\penalty0 (2):\penalty0
+  112--154, 2017.
+
+\bibitem[Gu{\'e}ant et~al.(2013)Gu{\'e}ant, Lehalle, and
+  Fernandez-Tapia]{gueant2013dealing}
+Olivier Gu{\'e}ant, Charles-Albert Lehalle, and Joaquin Fernandez-Tapia.
+\newblock Dealing with the inventory risk: A solution to the market making
+  problem.
+\newblock \emph{Mathematics and Financial Economics}, 7\penalty0 (4):\penalty0
+  477--507, 2013.
+
+\bibitem[Roll(1984)]{roll1984simple}
+Richard Roll.
+\newblock A simple implicit measure of the effective bid-ask spread in an
+  efficient market.
+\newblock \emph{The Journal of Finance}, 39\penalty0 (4):\penalty0 1127--1139,
+  1984.
+
+\end{thebibliography}
