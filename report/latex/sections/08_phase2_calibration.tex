@@ -1,7 +1,317 @@
 \section{Phase 2 --- Calibration from Trading History}
 \label{sec:phase2}
-% Subject task 8 --- covers src/utils/calibration/.
-% TODO: the five MLE calibrators (arrival k, Pareto size, GARCH vol, gamma
-% optimizer; spread calibrator), dependency graph, CalibratedConfigBuilder,
-% heuristic-vs-calibrated comparison, Phase 2 backtest results. Note:
-% client-flow A and k stay user-set in both phases (not calibrator outputs).
+
+\subsection{Why calibrate, and what to calibrate}
+
+Phase~1 was run with heuristic defaults inherited from the original
+Avellaneda--Stoikov / Gu\'eant / Cartea--Jaimungal papers: a risk
+aversion $\gamma = 0.10$, an arrival-decay $k = 0.30$, a one-session
+discount horizon $\omega = 1/(8\!\times\!3600)$, a base quoted size of
+70\,000~EUR across ten levels with a geometric decay $\beta = 0.30$,
+a 60-second EWMA window for realised volatility, and inventory-tilt
+weights $\alpha_{\text{spread}}, \alpha_{\text{imb}}$ picked by
+inspection. None of these values are estimated from data: they are
+reasonable starting points for the first run but no more. Phase~2
+replaces each of them with a value re-estimated from the 30-day
+fill history and price record produced by Phase~1.
+
+\paragraph{Scope of the calibration.} Only parameters that govern
+\emph{our own quoting behaviour} are re-estimated. Client-side
+quantities --- the Poisson arrival intensity $A$, the distance decay
+$k_{\text{client}}$ of client demand, the Pareto exponent $\alpha$
+and the size range $[x_{\min}, x_{\max}]$ --- are exogenous
+properties of the market, not outputs of our strategy. Changing them
+between Phase~1 and Phase~2 would mean comparing two different worlds
+rather than two different quoters, so they are held identical across
+phases and enter the calibration only as fixed inputs to downstream
+modules. The parameters that \emph{are} re-estimated belong to the
+\texttt{QuoterConfig} object consumed by the market maker:
+$\gamma, \omega,$ vol-window, $\alpha_{\text{spread}},
+\alpha_{\text{imb}}, k, \beta, Q_{\text{base}},$ and the
+staleness threshold stale\_s.
+
+\subsection{Data available from Phase~1}
+
+Every calibrator is fed directly from the artefacts of a completed
+Phase~1 run, accessible through the \texttt{Controller} instance:
+
+\begin{itemize}\itemsep2pt
+\item \texttt{trade\_history} --- one row per fill, tagged by side,
+price, size, ladder level, cross-venue fair mid at inception, post-fill
+inventory and whether the leg is a client fill on A or a hedge leg on
+B/C.
+\item \texttt{step\_log} --- one row per simulation step (\(10^7\)
+rows for a 30-day run at 100\,ms) with bid/ask/mid on all three venues,
+current inventory, number of resting MM orders, and fills since the
+previous step. This is the surface on which quote-distance and
+order-flow-imbalance features are reconstructed.
+\item \texttt{market\_B.noised\_mid\_price} --- the raw mid-price array
+of the deeper reference venue, used directly for realised-volatility
+estimation.
+\end{itemize}
+
+\subsection{Arrival-intensity decay~$k$}
+
+The A-S optimal-spread formula depends on the sensitivity of the
+fill rate to our quoted distance from the mid,
+\(\lambda(\delta) = A\,e^{-k\delta}\), where $\delta$ is measured in
+basis points. We recover $k$ from the ladder rather than fitting it
+to a continuous distance variable: each full reprice posts the ten
+levels simultaneously, so the number of observations $n_{\text{posted}}$
+is approximately constant across levels and fill counts become a
+direct proxy for fill rate. Taking logs gives
+\[
+\log n_{\text{fills}}(i) \;=\; \log(A \cdot C) \;-\; k \cdot \delta_i,
+\]
+so an ordinary least-squares regression of log-fill-count on the
+mean quoted bps distance at each level yields $-\hat k$ as the slope.
+Levels with fewer than three fills are dropped --- too noisy for a
+stable estimate --- and the regression is run separately for buys
+and sells, with the reported $k$ being their average. The
+coefficient is clipped to $[0.01, 5]$ to avoid pathological fits
+when fills concentrate at a single level. This approach is a
+Cartea--Jaimungal-style empirical recovery of the intensity
+parameter from observed fill frequencies, and requires no
+likelihood maximisation.
+
+\subsection{Volatility: EWMA span + GARCH(1,1)}
+
+The quoter uses an exponentially-weighted estimator of realised
+variance with span \texttt{vol\_window\_s}. Two independent models are
+fit and then compared.
+
+\paragraph{EWMA grid search.} We split the 30-day log-return series
+on venue~B into a 70\% training segment and a 30\% held-out tail.
+For each candidate span $w \in \{500, 1000, 2000, 4000, 6000, 10000\}$
+(in simulation steps) we initialise the EWMA variance on the training
+tail and then forecast one-step-ahead $\hat h_t$ out-of-sample,
+scoring the forecast against the squared return $r_t^2$ via RMSE.
+The span that minimises this error is retained. This is equivalent
+to picking the RiskMetrics decay that best tracks the realised
+variation of the mid --- a standard span-selection procedure that
+avoids overfitting the in-sample sample variance.
+
+\paragraph{GARCH(1,1) MLE.} In parallel we fit the classical
+Bollerslev specification
+\[
+h_{t+1} \;=\; \omega_{\text{g}} + \alpha\,r_t^2 + \beta\,h_t,
+\]
+by maximising the log-likelihood
+$\ell = -\tfrac12 \sum_t \left[\log h_t + r_t^2 / h_t\right]$
+under the constraints $\omega_{\text{g}} > 0$, $\alpha, \beta \ge 0$
+and the stationarity condition $\alpha + \beta < 1$. Optimisation
+is performed with a warm start at
+$(\alpha_0, \beta_0) = (0.05, 0.94)$, with $\omega_0$ set to the
+sample variance times $(1-\alpha_0-\beta_0)$ so that the
+unconditional variance matches the data. Because a pure-Python
+recursion is slow on $10^7$ observations, the log-return series is
+sub-sampled to at most 50\,000 points --- well beyond the sample size
+at which GARCH MLE has converged in simulation studies.
+
+\paragraph{Model selection.} The two models are compared on AIC and
+BIC. Both are computed under the same conditionally-Gaussian
+likelihood: EWMA has one effective parameter (the span), GARCH has
+three ($\omega_{\text{g}}, \alpha, \beta$). The smaller-AIC model is
+chosen for the quoter. In practice, at a 100\,ms step size EWMA is
+selected: the GARCH persistence is high but does not contribute enough
+additional log-likelihood to offset the two extra parameters.
+
+\subsection{Spread components $\alpha_{\text{spread}},
+\alpha_{\text{imb}}$}
+
+The quoter's reservation-price tilt decomposes into a
+$\gamma$-weighted inventory-state widening and an order-flow-imbalance
+skew:
+\[
+\text{half-spread}_t \;=\; \text{A-S}_t
+\;+\; \alpha_{\text{spread}}\,\bigl(q_t/K\bigr)^2 \cdot \text{A-S}_t
+\;+\; \alpha_{\text{imb}}\,\text{OFI}_t \cdot m_t,
+\]
+with $q_t$ the current EUR inventory, $K$ the capital and $\text{OFI}_t$
+a rolling order-flow imbalance in $[-1, +1]$. To recover the two
+$\alpha$ coefficients we work on the effective spread actually earned
+at each MM fill, $|p_{\text{fill}} - m_{\text{fair}}|$, and regress it
+on the two features evaluated at fill time:
+\[
+|p_{\text{fill}} - m_{\text{fair}}|
+\;=\; \beta_0
+\;+\; \beta_1 \bigl(q_t/K\bigr)^2
+\;+\; \beta_2 \,\text{OFI}_t
+\;+\; \varepsilon.
+\]
+OFI is reconstructed from the fill stream itself via a rolling
+fifty-fill window, as twice the fraction of buys in the window minus
+one, so a streak of client buys pushes OFI towards $+1$. The
+calibrated coefficients are mapped back to the quoter's
+parametrisation through $\hat\alpha_{\text{spread}} = \beta_1 / \beta_0$
+and $\hat\alpha_{\text{imb}} = |\beta_2| / \bar m_{\text{fair}}$,
+which divides out the units and puts both quantities on the same
+scale as the heuristic defaults. Both values are then clipped to
+plausible ranges ($[0, 5]$ and $[0, 0.01]$ respectively) as a
+safeguard against OLS artefacts on the short side of the sample.
+
+\subsection{Staleness threshold stale\_s}
+
+A resting quote should be pulled when the probability of seeing any
+further fill before the next price move has become negligible. The
+best level is the busiest on the ladder, so if fills at level~1
+arrive as a Poisson process with intensity $\lambda_1$, the time to
+next fill is exponential with mean $1/\lambda_1$ and
+$\mathbb{P}(T > t) = e^{-\lambda_1 t}$. Setting this probability to
+$25\%$ gives
+\[
+t_{75} \;=\; \frac{\log 4}{\lambda_1},
+\]
+which we use directly as stale\_s. The rate $\lambda_1$ is estimated
+simply as the total number of level-1 fills divided by the total
+elapsed simulation time. Deeper levels have lower arrival rates, so
+level~1 yields the tightest (and most conservative) threshold ---
+deep quotes that would technically still be alive at $t_{75}$ are
+handled by the next full reprice anyway. The result is clipped to
+$[0.5, 60]$~seconds to avoid outliers from degenerate samples.
+
+\subsection{Risk aversion $\gamma$ and horizon $\omega$}
+
+This is the only calibration step that combines the outputs of the
+others. Rather than trying to write a likelihood for our own
+decisions (the quoter is a deterministic policy, not a probabilistic
+model), we pick $(\gamma, \omega)$ by maximising a closed-form
+estimate of steady-state utility per second:
+\[
+U(\gamma, \omega) \;=\;
+\underbrace{\lambda(\delta^\ast) \cdot \delta^\ast \cdot \mathbb{E}[X]}_{\text{spread P\&L}}
+\;-\;
+\underbrace{\gamma\,\sigma^2
+\cdot \frac{1}{\omega\,T_{\text{year}}}
+\cdot \lambda(\delta^\ast)\,\mathbb{E}[X^2]\,\frac{1}{T_{\text{year}}}}_{\text{inventory-variance cost}},
+\]
+where $\delta^\ast(\gamma,\omega)$ is the A-S optimal half-spread
+replicated from the quoter,
+\[
+\text{spread}^{\text{AS}}
+\;=\; \gamma\,\sigma^2\,\frac{1}{\omega\,T_{\text{year}}}
+\;+\; \frac{2}{\gamma}\log\!\bigl(1 + \gamma / k\bigr).
+\]
+The ingredients are taken from the earlier calibrators and from the
+\texttt{ClientFlowConfig} defaults: $\sigma$ is the annualised log-return
+standard deviation computed on the venue-B mid; $(A_{\text{buy}}, k_{\text{buy}},
+A_{\text{sell}}, k_{\text{sell}})$ are the exogenous client arrival
+parameters; $\mathbb{E}[X]$ is the mean of the truncated Pareto client
+size distribution, evaluated in closed form from
+$(\alpha, x_{\min}, x_{\max})$.
+
+The search proceeds in two stages. We first evaluate $U$ on a
+coarse grid of seven candidate values for $\gamma$ (from $0.01$ to
+$2.0$) crossed with three candidate horizons for $\omega$
+(corresponding to 24-hour, 8-hour and 4-hour windows), and keep the
+pair $(\gamma^\ast, \omega^\ast)$ that maximises utility. We then
+refine $\gamma^\ast$ by a one-dimensional search over a narrow
+bracket around it, holding $\omega^\ast$ fixed, which sharpens the
+estimate without straying far from the best grid point. The whole
+procedure is analytical on the historical path --- it does not
+re-run the simulator --- so it is cheap enough to sit inside the
+calibration pipeline. An expected daily Sharpe ratio is reported at
+the optimum for diagnostic purposes.
+
+\subsection{Ladder shape $Q_{\text{base}}$ and $\beta$}
+
+The ladder parameters do not lend themselves to an MLE fit: the
+simulator never lets us observe what would have happened had we
+quoted with a different $Q_{\text{base}}$, and $\beta$ controls
+size decay across levels that Phase~1 barely populates. We therefore
+derive $Q_{\text{base}}$ from a design input rather than a data fit.
+The ladder-level sweep-through rate is the probability that a client
+order is large enough to consume the entire first level:
+\[
+\mathbb{P}(X > Q_{\text{base}})
+\;=\; \left(x_{\min}/Q_{\text{base}}\right)^{\alpha}
+\;=\; \text{target\_sweep},
+\]
+under the truncated Pareto with shape $\alpha$ and floor $x_{\min}$.
+Inverting this yields
+$Q_{\text{base}} = x_{\min} \cdot \text{target\_sweep}^{-1/\alpha}$.
+With $\alpha = 1.5$, $x_{\min} = 1\,000$~EUR, and a target sweep
+rate of 5\%, the calibrated $Q_{\text{base}}$ drops from 70\,000~EUR
+to roughly 7\,370~EUR. The shape parameter $\beta$ is chosen by hand
+(default $\beta = 1$ in Phase~2, so level~2 quotes $\approx 37\%$ of
+level~1). The choice reflects a prior on ladder concentration rather
+than an estimated quantity.
+
+\subsection{How the calibrators fit together}
+
+The five estimators and the ladder derivation are run as a single
+pipeline that reads Phase~1 data once and produces the full set of
+Phase~2 quoter parameters. The dependency graph is shallow. Four
+estimators --- volatility, spread components, arrival decay $k$ and
+staleness threshold --- can be computed independently of each other,
+because each relies on a different slice of the Phase~1 output
+(mid-price series, effective-spread regression, fills by level,
+level-1 fill rate). A second stage then uses the volatility output
+to compute $\sigma$ for the $\gamma$-optimisation, and inverts the
+Pareto client-size distribution to set the base quoted size
+$Q_{\text{base}}$.
+
+\begin{figure}[ht]
+\centering
+\begin{tabular}{rcl}
+\multicolumn{3}{c}{\textbf{Stage 1 --- independent estimators}} \\[3pt]
+Volatility           & $\longrightarrow$ & $\sigma,$ vol-window \\
+Spread components    & $\longrightarrow$ & $\alpha_{\text{spread}}, \alpha_{\text{imb}}$ \\
+Arrival decay        & $\longrightarrow$ & $k$ \\
+Staleness threshold  & $\longrightarrow$ & stale\_s \\[5pt]
+\multicolumn{3}{c}{\textbf{Stage 2 --- depends on Stage 1}} \\[3pt]
+Risk-aversion optimisation ($\sigma,$ arrival, size)  & $\longrightarrow$ & $\gamma, \omega$ \\
+Pareto-inversion ($\alpha, x_{\min},$ target-sweep)   & $\longrightarrow$ & $Q_{\text{base}}$ \\
+\end{tabular}
+\caption{Dependency structure of the Phase~2 calibration pipeline.
+Stage~1 estimators are mutually independent; Stage~2 consumes the
+volatility output together with the fixed client-flow parameters.}
+\label{fig:p2-deps}
+\end{figure}
+
+Once the pipeline finishes, the calibrated values replace the
+Phase~1 heuristics in the quoter configuration, and the Phase~2
+backtest is launched with exactly the same simulation machinery as
+Phase~1 --- fresh stock and market paths, identical client-flow
+parameters --- with only the quoting configuration having changed.
+
+\subsection{From heuristic defaults to calibrated values}
+
+Running the pipeline on the 30-day Phase~1 backtest produces the
+calibrated values shown in Table~\ref{tab:p2-calibrated}. Each entry
+is the output of one of the procedures described above; the next
+subsection interprets the direction and magnitude of each change.
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{lrr}
+\toprule
+Parameter & Phase 1 (heuristic) & Phase 2 (calibrated) \\
+\midrule
+Risk aversion $\gamma$                    & 0.100        & 0.0081     \\
+Discount rate $\omega$ (s$^{-1}$)         & $3.47\!\times\!10^{-5}$ & $1.16\!\times\!10^{-5}$ \\
+Volatility window (s)                     & 60           & 5          \\
+Inventory spread weight $\alpha_{\text{spread}}$  & 0.500 & 5.00       \\
+OFI weight $\alpha_{\text{imb}}$          & $2\!\times\!10^{-4}$ & $1.41\!\times\!10^{-5}$ \\
+Arrival decay $k$ (bp$^{-1}$)             & 0.30         & 0.30       \\
+Base quoted size $Q_{\text{base}}$ (EUR)  & 70\,000      & 7\,370     \\
+Ladder decay $\beta$                      & 0.30         & 1.00       \\
+Staleness threshold stale\_s (s)          & 10           & 60         \\
+Target sweep-through rate                 & n/a          & 0.05       \\
+Recommended vol model                     & --           & EWMA       \\
+\bottomrule
+\end{tabular}
+\caption{Heuristic defaults (Phase~1) versus values produced by the
+calibration pipeline (Phase~2). Client-flow parameters
+$A_{\text{buy}}, A_{\text{sell}}, k_{\text{buy}}, k_{\text{sell}},
+\alpha, x_{\min}, x_{\max}$ are exogenous and held fixed across
+both phases.}
+\label{tab:p2-calibrated}
+\end{table}
+
+The next subsection turns to the analysis of the Phase~2 backtest:
+how the calibrated quoter behaves relative to Phase~1, whether the
+directional risk-taking implied by the tighter $\gamma$ is rewarded,
+and how the ladder-utilisation and hedging-frequency diagnostics
+shift under the new configuration.

@@ -1,9 +1,15 @@
-\begin{thebibliography}{8}
+\begin{thebibliography}{13}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Aban et~al.(2006)Aban, Meerschaert, and Panorska]{aban2006parameter}
+Inmaculada~B. Aban, Mark~M. Meerschaert, and Anna~K. Panorska.
+\newblock Parameter estimation for the truncated {Pareto} distribution.
+\newblock \emph{Journal of the American Statistical Association}, 101\penalty0
+  (473):\penalty0 270--277, 2006.
 
 \bibitem[Avellaneda and Stoikov(2008)]{avellaneda2008high}
 Marco Avellaneda and Sasha Stoikov.
@@ -16,6 +22,18 @@ Bruno Biais, Pierre Hillion, and Chester Spatt.
   the {Paris} bourse.
 \newblock \emph{The Journal of Finance}, 50\penalty0 (5):\penalty0 1655--1689,
   1995.
+
+\bibitem[Bollerslev(1986)]{bollerslev1986generalized}
+Tim Bollerslev.
+\newblock Generalized autoregressive conditional heteroskedasticity.
+\newblock \emph{Journal of Econometrics}, 31\penalty0 (3):\penalty0 307--327,
+  1986.
+
+\bibitem[Cartea et~al.(2015)Cartea, Jaimungal, and
+  Penalva]{carteajaimungal2015algorithmic}
+{\'A}lvaro Cartea, Sebastian Jaimungal, and Jos{\'e} Penalva.
+\newblock \emph{Algorithmic and High-Frequency Trading}.
+\newblock Cambridge University Press, Cambridge, 2015.
 
 \bibitem[Cont et~al.(2014)Cont, Kukanov, and Stoikov]{cont2014price}
 Rama Cont, Arseniy Kukanov, and Sasha Stoikov.
@@ -49,6 +67,17 @@ Olivier Gu{\'e}ant, Charles-Albert Lehalle, and Joaquin Fernandez-Tapia.
   problem.
 \newblock \emph{Mathematics and Financial Economics}, 7\penalty0 (4):\penalty0
   477--507, 2013.
+
+\bibitem[Ho and Stoll(1981)]{hostoll1981optimal}
+Thomas Ho and Hans~R. Stoll.
+\newblock Optimal dealer pricing under transactions and return uncertainty.
+\newblock \emph{Journal of Financial Economics}, 9\penalty0 (1):\penalty0
+  47--73, 1981.
+
+\bibitem[{J.P. Morgan/Reuters}(1996)]{riskmetrics1996}
+{J.P. Morgan/Reuters}.
+\newblock {RiskMetrics} --- {Technical Document}.
+\newblock Technical report, J.P. Morgan/Reuters, New York, 1996.
 
 \bibitem[Roll(1984)]{roll1984simple}
 Richard Roll.
