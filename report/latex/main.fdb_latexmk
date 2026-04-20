@@ -1,13 +1,13 @@
 # Fdb version 4
-["bibtex main"] 1776715827.35067 "main.aux" "main.bbl" "main" 1776715830.44591 0
+["bibtex main"] 1776721032.28728 "main.aux" "main.bbl" "main" 1776721035.0454 0
   "./references.bib" 1776715779.59113 4023 6317d15259491d2c1f4f97b46ab60f9a ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/bibtex/bst/natbib/plainnat.bst" 1284455456 26816 ffe5423d2019860bad9f54bc402fac15 ""
-  "main.aux" 1776715829.43941 19775 3d07e9a5d917c2ba526aa07b5a79b9c4 "pdflatex"
+  "main.aux" 1776721034.17415 20353 ef37f9257224d880498d9b6893edccc4 "pdflatex"
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1776715827.67285 "main.tex" "main.pdf" "main" 1776715830.44744 0
+["pdflatex"] 1776721032.54636 "main.tex" "main.pdf" "main" 1776721035.04615 0
   "../images/client-flow-intensity.png" 1776702220.26968 35912 ce1f8215d3105c8f3745c501b04b5fd2 ""
   "../images/client-flow-pareto.png" 1776702312.43923 25637 4c8e5d4cd35dd3ae98f7c62108d7a298 ""
   "../images/orderbook_1.png" 1776689353.43146 62701 093d8dcb6051eccf14730c017030bac6 ""
@@ -148,11 +148,11 @@
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/units/nicefrac.sty" 1469029150 4163 98f285ced1c61c25144faeaf509fbad0 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/url/url.sty" 1388490452 12796 8edb7d69a20b857904dd0ea757c14ec9 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/xcolor/xcolor.sty" 1729265222 55384 b454dec21c2d9f45ec0b793f0995b992 ""
-  "main.aux" 1776715829.43941 19775 3d07e9a5d917c2ba526aa07b5a79b9c4 "pdflatex"
-  "main.bbl" 1776715827.59443 3782 5f27101de73c43abf62b3a8193a51712 "bibtex main"
-  "main.out" 1776715829.45241 10981 c0ca40b8d3590d8c7b9471c9be3f3e1d "pdflatex"
-  "main.tex" 1776715289.90281 4075 5266ff8089e878794629b432c9842b56 ""
-  "main.toc" 1776715829.45941 5641 cb5ff3826e27452a962b5f336faafcf0 "pdflatex"
+  "main.aux" 1776721034.17415 20353 ef37f9257224d880498d9b6893edccc4 "pdflatex"
+  "main.bbl" 1776721032.48709 3782 5f27101de73c43abf62b3a8193a51712 "bibtex main"
+  "main.out" 1776721034.18405 11112 dc59e16eb2cd1fbf349ab2081744251f "pdflatex"
+  "main.tex" 1776721017.73008 3965 f8876291c319fca50d04eece0d8d090c ""
+  "main.toc" 1776721034.19106 5723 c01b5dc1705f5639be7b008379ce893c "pdflatex"
   "sections/00_introduction.tex" 1776715453.75029 5394 5e75999df0f5d107669dba2c0924cf65 ""
   "sections/00b_literature_review.tex" 1776715808.3918 3554 8bbfe084863a5298f34e3e88e6e69f20 ""
   "sections/01_orderbook.tex" 1776691275.36725 3772 dfc1ca4094c1f37e16b3eb268b357850 ""
@@ -161,7 +161,7 @@
   "sections/04_client_flow.tex" 1776702351.43837 6722 b8ec170aa1e7e8a766e642924dcba396 ""
   "sections/06_pnl_inventory.tex" 1776701150.07076 3991 045b45bccc572467308e2b492e85af9a ""
   "sections/07_backtest_report.tex" 1776707870.97506 11290 f23d9a17d09dd83da9f49ccc233f3252 ""
-  "sections/08_phase2_calibration.tex" 1776715092.29501 15555 367eb54544b2b0e8ccb6647a01b1c037 ""
+  "sections/08_phase2_calibration.tex" 1776720309.69906 18465 e71e7099e82e6ec68700dd345349315a ""
   "sections/09_phase3_hft.tex" 1776677265.94266 332 01c7f83f80375ae9935b24a59a7d3261 ""
   "sections/10_conclusion.tex" 1776677435.87882 256 0501d2dade9646cda219b28ff2f357a1 ""
   (generated)
