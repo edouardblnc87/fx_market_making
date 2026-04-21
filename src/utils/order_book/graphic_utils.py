@@ -4,7 +4,7 @@ from . import order_book_impl
 import matplotlib.pyplot as plt
 
 def plot_order_book(order_book : order_book_impl.Order_book):
-        """Plot the cumulative bid and ask depth of the order book as a step chart."""
+    """Plot the cumulative bid and ask depth of the order book as a step chart."""
 
 
     if order_book._df_bid_book.empty or order_book._df_ask_book.empty:
