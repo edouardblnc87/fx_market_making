@@ -1,13 +1,13 @@
 # Fdb version 4
-["bibtex main"] 1776724583.82516 "main.aux" "main.bbl" "main" 1776724587.99723 0
+["bibtex main"] 1776756778.15666 "main.aux" "main.bbl" "main" 1776756782.57751 0
   "./references.bib" 1776715779.59113 4023 6317d15259491d2c1f4f97b46ab60f9a ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/bibtex/bst/natbib/plainnat.bst" 1284455456 26816 ffe5423d2019860bad9f54bc402fac15 ""
-  "main.aux" 1776724586.73803 23462 341a2a7737dbfe20f95fbf979186899f "pdflatex"
+  "main.aux" 1776756781.28272 26427 1faba429a585315821983c57448f7836 "pdflatex"
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1776724584.34762 "main.tex" "main.pdf" "main" 1776724587.99808 0
+["pdflatex"] 1776756778.69063 "main.tex" "main.pdf" "main" 1776756782.57842 0
   "../images/client-flow-intensity.png" 1776702220.26968 35912 ce1f8215d3105c8f3745c501b04b5fd2 ""
   "../images/client-flow-pareto.png" 1776702312.43923 25637 4c8e5d4cd35dd3ae98f7c62108d7a298 ""
   "../images/orderbook_1.png" 1776689353.43146 62701 093d8dcb6051eccf14730c017030bac6 ""
@@ -16,7 +16,10 @@
   "../images/phase1-inventory-vs-price.png" 1776706086.47985 135639 e52a1aa4981001068e5bbcb0411f0c90 ""
   "../images/phase1-mtm-percentiles.png" 1776706086.49938 62098 161721eeca30a7d79a843e4556dcad38 ""
   "../images/phase1-top10-trades.png" 1776706086.46083 79019 bcd6ad06d59b63483cea0269a568e6c3 ""
+  "../images/phase2_2.png" 1776756633.52101 98988 433149c3d598a3a86447b98e371beb06 ""
+  "../images/phase2_3.png" 1776756329.55655 173765 c386cff693311d25803efad647dbe639 ""
   "../images/phase3-inventory-vs-price.png" 1776724375.96125 102245 eed22eadd0adf725481ff7a7b72f7151 ""
+  "../images/phase3_2.png" 1776756360.53274 110777 9931a72b5137c09cb6d367811e25cbb9 ""
   "../images/spread-regimes-garch.png" 1776698716.03072 398763 f4d9307bb30f4f9d3c282d28ee512804 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/map/pdftex/pdftex.map" 1776677354.75836 81088 29d6fa367ac022d1b69251d68c0742e6 ""
   "C:/Users/cleme/AppData/Local/MiKTeX/fonts/pk/ljfour/jknappen/ec/dpi600/ecbx1000.pk" 1776697030.66379 25420 0c1394d8846720cfd83fdeb04c6b6a72 ""
@@ -151,11 +154,11 @@
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/units/nicefrac.sty" 1469029150 4163 98f285ced1c61c25144faeaf509fbad0 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/url/url.sty" 1388490452 12796 8edb7d69a20b857904dd0ea757c14ec9 ""
   "C:/Users/cleme/AppData/Local/Programs/MiKTeX/tex/latex/xcolor/xcolor.sty" 1729265222 55384 b454dec21c2d9f45ec0b793f0995b992 ""
-  "main.aux" 1776724586.73803 23462 341a2a7737dbfe20f95fbf979186899f "pdflatex"
-  "main.bbl" 1776724584.26242 3782 5f27101de73c43abf62b3a8193a51712 "bibtex main"
-  "main.out" 1776724586.76394 11996 40e78c2ad428753026fefb996dbe9621 "pdflatex"
+  "main.aux" 1776756781.28272 26427 1faba429a585315821983c57448f7836 "pdflatex"
+  "main.bbl" 1776756778.60583 3782 5f27101de73c43abf62b3a8193a51712 "bibtex main"
+  "main.out" 1776756781.31572 12232 d9c4bdfc3b442e66c5f586dbb2f15e15 "pdflatex"
   "main.tex" 1776721017.73008 3965 f8876291c319fca50d04eece0d8d090c ""
-  "main.toc" 1776724586.78221 6737 0a643155562bacebb1153848f736b28d "pdflatex"
+  "main.toc" 1776756781.34371 6839 1f2847310fd8ac0700cccee55fee46a7 "pdflatex"
   "sections/00_introduction.tex" 1776715453.75029 5394 5e75999df0f5d107669dba2c0924cf65 ""
   "sections/00b_literature_review.tex" 1776715808.3918 3554 8bbfe084863a5298f34e3e88e6e69f20 ""
   "sections/01_orderbook.tex" 1776691275.36725 3772 dfc1ca4094c1f37e16b3eb268b357850 ""
@@ -164,8 +167,8 @@
   "sections/04_client_flow.tex" 1776702351.43837 6722 b8ec170aa1e7e8a766e642924dcba396 ""
   "sections/06_pnl_inventory.tex" 1776701150.07076 3991 045b45bccc572467308e2b492e85af9a ""
   "sections/07_backtest_report.tex" 1776707870.97506 11290 f23d9a17d09dd83da9f49ccc233f3252 ""
-  "sections/08_phase2_calibration.tex" 1776723639.21805 19111 bb59a0af646a13f48f05285792927dd6 ""
-  "sections/09_phase3_hft.tex" 1776724266.96767 10588 2f91821e38e58731467bdd7b06cc36cf ""
+  "sections/08_phase2_calibration.tex" 1776756692.34675 21596 411337308691b43c69c0773b85e34717 ""
+  "sections/09_phase3_hft.tex" 1776756735.94172 12033 967c32b814050f5c8b4c18d6add0bf25 ""
   "sections/10_conclusion.tex" 1776724513.69101 2568 d20896644b55dcac1cd34f976c75702b ""
   (generated)
   "main.aux"

@@ -123,6 +123,34 @@ quotes anchor the top of book. In calm conditions, the HFT wins;
 this is the economically efficient outcome from a customer's
 perspective.
 
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase3_2.png}
+\caption{Quoted spread on A across the 15-day Phase~3 run, coloured
+by HFT state. Left: spread time series with background shading
+per state (green \textsc{active}, yellow \textsc{one-sided-bid},
+orange \textsc{one-sided-ask}, red \textsc{offline}). Right:
+distribution of the quoted spread conditional on each state ---
+medians of $6.86$, $6.78$, $6.91$ and $7.52$~bps respectively.}
+\label{fig:p3-spread-by-state}
+\end{figure}
+
+Figure~\ref{fig:p3-spread-by-state} decomposes the tightening into
+its per-regime components. When the HFT is \textsc{active} the
+quoted spread on A sits at a median of $6.86$~bps --- the anchoring
+effect of its $40\%$-A-S quotes at the top of book. The two
+one-sided regimes produce near-identical medians ($6.78$ and
+$6.91$~bps), which is what we should expect: even though only one
+side of the HFT's book is live, it still constrains the tight side
+of our spread while we continue to post a symmetric ladder. The
+\textsc{offline} regime is qualitatively different: the median
+jumps to $7.52$~bps with a visibly heavier upper tail, because with
+no competing quote on the venue our ladder's own A-S spread sets
+the top-of-book width. The $\sim$0.7~bps step between the HFT-on
+and HFT-off distributions is the empirical price of the HFT's
+liquidity --- and, symmetrically, the premium the DMM charges when
+it is alone in the book.
+
 \paragraph{One-sided regimes push inventory, not hedges.} Final EUR
 inventory flips sign and more than doubles in magnitude, from
 $-49\,104$ in Phase~2 to $+106\,835$ in Phase~3. The mechanism is

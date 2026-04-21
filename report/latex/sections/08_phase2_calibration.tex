@@ -380,3 +380,56 @@ product of the refined OFI skew rather than more aggressive risk
 offload. The calibration achieves what it was designed for: more
 fills at better prices, with inventory kept closer to neutral and
 total MtM P\&L materially higher on any path we tested.
+
+\subsection{Diagnostics on the calibrated run}
+
+Two diagnostic plots exported from the calibration notebook give
+intuition for \emph{how} the Phase~2 quoter uses its parameters
+across the 15-day fresh path.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase2_2.png}
+\caption{Quoted spread on A (mean $8.04$~bps) against the
+reference-venue spread on B (mean $2.48$~bps) and the annualised
+realised volatility of the B mid. The A spread widens visibly during
+the three vol spikes on the path and compresses back toward its
+floor in the quiet segments, while staying everywhere above the B
+reference spread.}
+\label{fig:p2-spread-vs-vol}
+\end{figure}
+
+Figure~\ref{fig:p2-spread-vs-vol} is the cleanest visual check that
+the calibration is doing its job. The quoted spread on A tracks the
+realised-vol envelope on B --- precisely the behaviour the A-S
+$\gamma\sigma^2/\omega$ term plus the calibrated EWMA window are
+designed to produce --- and it never collapses below the reference
+spread on B, as a well-behaved DMM quote should not. The
+persistence of a $\sim$5--6~bps wedge between the two curves in calm
+conditions is the inventory-risk premium the quoter charges on top
+of the pass-through of B's spread, not a mis-calibration.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\linewidth]{phase2_3.png}
+\caption{Fill rate and order flow on the Phase~2 fresh-path run.
+Top-left: rolling 10-min fill rate against the theoretical Poisson
+intensity $A$. Top-right: empirical fill-size distribution,
+consistent with the truncated-Pareto client model. Bottom-left:
+50-fill rolling order-flow imbalance mean-reverting around zero.
+Bottom-right: fill share per ladder level --- level~1 dominates,
+as expected given the ladder-size calibration.}
+\label{fig:p2-fill-flow}
+\end{figure}
+
+Figure~\ref{fig:p2-fill-flow} validates the client-side assumptions
+the calibration rests on. The rolling fill rate hugs the
+theoretical Poisson intensity $A$, so the arrival process we
+regress $k$ against is well-specified; the fill-size histogram
+inherits the heavy right tail of the truncated-Pareto input, which
+is what the $Q_{\text{base}}$ inversion presumes. The OFI series
+mean-reverts around zero over 50-fill windows --- necessary for
+$\alpha_{\text{imb}}$ to act as a skew rather than a persistent
+drift term --- and level~1 dominates the fill share, confirming
+that the ladder-concentration implied by $\beta$ matches where the
+realised flow actually lands.
