@@ -151,7 +151,7 @@ The demo config is deliberately **not a default** on `QuoterConfig` — these va
 
 - **`Controller` is the canonical entry point.** No notebook should hand-roll a step loop — the log schema, hedge ordering, and HFT integration are only correct through `Controller`.
 - **`step_log` is the primary debug surface.** Inventory, fill counts, and quote counts per step live here. Fills themselves live in `trade_history` (one row per match).
-- **Cash-flow sign convention is load-bearing.** Positive = cash in, negative = cash out, USD. Breaking this silently corrupts `realized_pnl`. See the project-level `CLAUDE.md` for the full convention.
+- **Cash-flow sign convention is load-bearing.** Positive = cash in, negative = cash out, USD. Breaking this silently corrupts `realized_pnl`. MM sells EUR: `+price × size × (1 − maker_fee_A)`. MM buys EUR: `−price × size × (1 + maker_fee_A)`. Hedge legs cross on B/C and pay the taker fee.
 - **Pass `step_log` to `PnLTracker.plot`.** Without it, the MtM curve is sparse (one point per fill); with it, MtM is interpolated at every logged step via `_continuous_mtm`.
 - **Log is downsampled.** Long runs write every `_log_stride`-th step. The `fills_this_step` / `quotes_posted` counters are accumulated across skipped steps so no fill is lost — only the price/inventory snapshot is subsampled.
 
