@@ -29,17 +29,4 @@ on simulated paths: the stock, the client flow and the HFT
 behaviour are all our own models, so the numbers should be read as
 internally consistent rather than externally validated.
 
-Natural extensions follow directly. Replacing the HFT schedule
-with an adversary that learns to withdraw optimally against our
-quoting policy would turn Phase~3 into a proper game and expose
-whether the fallback premium is robust to strategic play.
-Extending calibration to live EUR/USD tick data would close the
-loop between the MLE machinery and the real arrival process.
-Cross-pair hedging --- routing EUR risk through EUR/GBP or
-EUR/JPY when B and C depth is thin --- would relax the
-single-venue-pair assumption that currently bounds the hedge
-router. Finally, the contract-design question raised at the end
-of Phase~3 (availability-based DMM compensation rather than
-volume-based) is the natural bridge from this simulator to the
-market-microstructure policy literature, and the clearest direction
-in which this project would want to be taken next.
+Natural extensions stay close to the current scope. The HFT schedule could be replaced with a simple reactive adversary — withdrawing when our quotes cross a staleness threshold — to test whether the fallback premium holds against light strategic play, without committing to a full game-theoretic treatment. Calibration could be re-run on a longer simulated horizon to check stability of the MLE estimates across regimes, before any move to live data. The hedge router could be extended to use B and C asymmetrically based on realised depth rather than fixed weights, which is a small change to the existing logic. These are incremental refinements of the existing machinery rather than new research directions.
