@@ -1286,6 +1286,181 @@ class Controller:
         plt.tight_layout()
         plt.show()
 
+        # ── Plot D: MM fill size by HFT state + direction ─────────────────────
+        if not trades.empty:
+            mm_fills_df = trades[~trades['is_hedge']].copy().sort_values('t')
+            fills_state = pd.merge_asof(
+                mm_fills_df[['t', 'direction', 'size', 'price', 'fair_mid']],
+                log[['t', 'hft_state']].sort_values('t'),
+                on='t', direction='backward',
+            )
+
+            fig_d, axes_d = plt.subplots(1, 2, figsize=(14, 5))
+            fig_d.patch.set_facecolor('#111111')
+            fig_d.suptitle(
+                'MM fill size by HFT state & direction\n'
+                'ONE_SIDED_BID → HFT quotes bids only → large orders spill to MM on bid side; '
+                'ask side uncontested → all sizes reach MM',
+                color='white', fontsize=11,
+            )
+            dir_cfg = [
+                ('buy',  '#3fb950', 'MM buy fills  (client sold → hit MM bid)'),
+                ('sell', '#f85149', 'MM sell fills  (client bought → hit MM ask)'),
+            ]
+            for ax_d, (direction, color, title) in zip(axes_d, dir_cfg):
+                ax_d.set_facecolor('#111111')
+                ax_d.tick_params(colors='white')
+                ax_d.grid(True, linestyle='--', linewidth=0.4, alpha=0.4,
+                          color='#444444', axis='y')
+                for sp in ['top', 'right']:
+                    ax_d.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']:
+                    ax_d.spines[sp].set_color('#444444')
+
+                side = fills_state[fills_state['direction'] == direction]
+                box_data, box_labels, box_colors = [], [], []
+                for sv in range(4):
+                    vals = side.loc[side['hft_state'] == sv, 'size'].values / 1_000
+                    if len(vals):
+                        box_data.append(vals)
+                        box_labels.append(state_labels_list[sv])
+                        box_colors.append(state_colors[sv])
+
+                if box_data:
+                    bp = ax_d.boxplot(
+                        box_data, patch_artist=True, widths=0.5,
+                        medianprops=dict(color='white', linewidth=1.5),
+                        whiskerprops=dict(color='#888888'),
+                        capprops=dict(color='#888888'),
+                        flierprops=dict(marker='.', color='#888888',
+                                        markersize=2, alpha=0.4),
+                    )
+                    for patch, c in zip(bp['boxes'], box_colors):
+                        patch.set_facecolor(c + '44')
+                        patch.set_edgecolor(c)
+                    ax_d.set_xticks(range(1, len(box_labels) + 1))
+                    ax_d.set_xticklabels(box_labels, color='white',
+                                         fontsize=8, rotation=15, ha='right')
+                    for i, (vals, c) in enumerate(zip(box_data, box_colors)):
+                        ax_d.text(i + 1, float(np.nanmedian(vals)),
+                                  f'med {np.nanmedian(vals):.1f}k',
+                                  ha='center', va='bottom',
+                                  fontsize=7, color=c)
+                ax_d.set_ylabel('Fill size (kEUR)', color='white')
+                ax_d.set_title(title, color='white', fontsize=10)
+
+            plt.tight_layout()
+            plt.show()
+
+        # ── Plot E: Customer effective half-spread by HFT state ───────────────
+        if not trades.empty and 'fills_state' in dir():
+            fills_state = fills_state.copy()
+            fills_state['eff_hs_bps'] = np.where(
+                fills_state['direction'] == 'sell',
+                (fills_state['price'] - fills_state['fair_mid'])
+                / fills_state['fair_mid'].replace(0, np.nan) * 1e4,
+                (fills_state['fair_mid'] - fills_state['price'])
+                / fills_state['fair_mid'].replace(0, np.nan) * 1e4,
+            )
+
+            fig_e, (ax_e1, ax_e2) = plt.subplots(1, 2, figsize=(14, 5))
+            fig_e.patch.set_facecolor('#111111')
+            fig_e.suptitle(
+                'Exchange A — customer execution cost by HFT state\n'
+                'Effective half-spread = |fill price − fair mid| in bps  '
+                '(lower = better execution for the client)',
+                color='white', fontsize=11,
+            )
+            for ax_e in (ax_e1, ax_e2):
+                ax_e.set_facecolor('#111111')
+                ax_e.tick_params(colors='white')
+                ax_e.grid(True, linestyle='--', linewidth=0.4,
+                          alpha=0.4, color='#444444', axis='y')
+                for sp in ['top', 'right']:
+                    ax_e.spines[sp].set_visible(False)
+                for sp in ['left', 'bottom']:
+                    ax_e.spines[sp].set_color('#444444')
+
+            # Box plot: distribution per state
+            box_e, labels_e, colors_e = [], [], []
+            for sv in range(4):
+                vals = fills_state.loc[fills_state['hft_state'] == sv,
+                                       'eff_hs_bps'].dropna().values
+                vals = vals[np.isfinite(vals) & (vals > 0)]
+                if len(vals):
+                    box_e.append(vals)
+                    labels_e.append(state_labels_list[sv])
+                    colors_e.append(state_colors[sv])
+
+            if box_e:
+                bp_e = ax_e1.boxplot(
+                    box_e, patch_artist=True, widths=0.5,
+                    medianprops=dict(color='white', linewidth=1.5),
+                    whiskerprops=dict(color='#888888'),
+                    capprops=dict(color='#888888'),
+                    flierprops=dict(marker='.', color='#888888',
+                                   markersize=2, alpha=0.4),
+                )
+                for patch, c in zip(bp_e['boxes'], colors_e):
+                    patch.set_facecolor(c + '44')
+                    patch.set_edgecolor(c)
+                ax_e1.set_xticks(range(1, len(labels_e) + 1))
+                ax_e1.set_xticklabels(labels_e, color='white',
+                                      fontsize=8, rotation=15, ha='right')
+                for i, (vals, c) in enumerate(zip(box_e, colors_e)):
+                    ax_e1.text(i + 1, float(np.nanmedian(vals)),
+                               f'{np.nanmedian(vals):.2f}',
+                               ha='center', va='bottom', fontsize=7.5, color=c)
+            ax_e1.set_ylabel('Eff. half-spread (bps)', color='white')
+            ax_e1.set_title('Distribution per HFT state', color='white', fontsize=10)
+
+            # Mean bar per state, split buy/sell — shows one-sided asymmetry
+            sv_present = [sv for sv in range(4)
+                          if len(fills_state[fills_state['hft_state'] == sv]) > 0]
+            bar_labels  = [state_labels_list[sv] for sv in sv_present]
+            bar_colors  = [state_colors[sv] for sv in sv_present]
+            mean_buy  = [
+                float(fills_state.loc[(fills_state['hft_state'] == sv)
+                                      & (fills_state['direction'] == 'buy'),
+                                      'eff_hs_bps'].mean() or 0)
+                for sv in sv_present
+            ]
+            mean_sell = [
+                float(fills_state.loc[(fills_state['hft_state'] == sv)
+                                      & (fills_state['direction'] == 'sell'),
+                                      'eff_hs_bps'].mean() or 0)
+                for sv in sv_present
+            ]
+            x_e = np.arange(len(sv_present))
+            w_e = 0.35
+            bars_buy  = ax_e2.bar(x_e - w_e / 2, mean_buy,  w_e,
+                                  label='Client sell (hit bid)',
+                                  color='#3fb95088', edgecolor='#3fb950')
+            bars_sell = ax_e2.bar(x_e + w_e / 2, mean_sell, w_e,
+                                  label='Client buy  (hit ask)',
+                                  color='#f8514988', edgecolor='#f85149')
+            ax_e2.set_xticks(x_e)
+            ax_e2.set_xticklabels(bar_labels, color='white',
+                                  fontsize=8, rotation=15, ha='right')
+            ax_e2.set_ylabel('Mean eff. half-spread (bps)', color='white')
+            ax_e2.set_title(
+                'Mean execution cost by state & direction\n'
+                'ONE_SIDED → asymmetric cost: unquoted side reverts to MM spread',
+                color='white', fontsize=9,
+            )
+            ax_e2.legend(facecolor='#222222', edgecolor='#444444',
+                         labelcolor='white', fontsize=8)
+            for bars in (bars_buy, bars_sell):
+                for bar in bars:
+                    h = bar.get_height()
+                    if h > 0:
+                        ax_e2.text(bar.get_x() + bar.get_width() / 2, h,
+                                   f'{h:.2f}', ha='center', va='bottom',
+                                   fontsize=7, color='white')
+
+            plt.tight_layout()
+            plt.show()
+
     # ── Phase 3 ───────────────────────────────────────────────────────────────
 
     def _reset_hft(self, cfg: HFTConfig, schedule=None) -> None:
